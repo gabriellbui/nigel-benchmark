@@ -1,0 +1,32 @@
+PR,Severity,Golden Bug Description,Caught?,Plugin Finding,Miss Reason
+8087,Low,"Try-catch around await to handle import failures",NO,,Found different import issues but not this specific one
+8087,Critical,"forEach with async callbacks causes fire-and-forget promises",YES,"Bug 1: forEach async fire-and-forget (confidence 95)",
+10600,Low,"TwoFactor function in BackupCode.tsx — inconsistent naming",NO,,Plugin found formatBackupCode TDZ and stale form field instead
+10600,Low,"Error message mentions 'backup code login' but this is disable endpoint",NO,,Domain-specific text — too subtle
+10600,Medium,"Backup code validation case-sensitive (indexOf). Should be case-insensitive",NO,,Case sensitivity edge case not detected
+10600,High,"Concurrent backup code use — race condition on in-memory decrypt+mutate",NO,,Concurrency/TOCTOU not detected
+10967,High,"Null reference if mainHostDestinationCalendar is undefined",YES,"Bug 1: Null dereference (confidence 90)",
+10967,Low,"Optional chaining on mainHostDestinationCalendar?.integration is redundant",NO,,Filtered out as low-priority nit
+10967,High,"Logic error: find(cal => externalId === externalCalendarId) always fails in else branch",YES,"Bug 2: Logically broken fallback (confidence 85)",
+10967,Medium,"Logic inversion in organization creation slug/requestedSlug conditions",NO,,Not detected — requires understanding billing flag semantics
+10967,Low,"Calendar interface requires credentialId but some implementations don't accept it",NO,,Not detected
+22345,Low,"getBaseConditions else-if/else branches unreachable (authConditions always truthy)",NO,,Explicitly dismissed as 'actually fine — not a bug'
+22345,Medium,"userIdsFromOrg only fetched when teamsFromOrg.length > 0 — excludes org-level members",NO,,Requires data model knowledge
+7232,Medium,"Async delete functions called without await inside forEach loops",YES,"Bug 2: forEach async unawaited (confidence 80)",
+7232,High,"immediateDelete=true cancels SendGrid but never deletes DB record — orphaned rows",YES,"Bug 1: immediateDelete never removes DB record (confidence 90)",
+8330,Medium,"Incorrect end time calculation using slotStartTime instead of slotEndTime",YES,"Bug 2: Copy-paste error — end uses startTime (confidence 98)",
+8330,Medium,"=== on dayjs objects compares references not values. Use .isSame()",YES,"Bug 1: Object reference comparison (confidence 95)",
+11059,High,"parseRefreshTokenResponse sets refresh_token to hardcoded string 'refresh_token'",NO,,Not specifically identified — focused on throw/safeParse mismatch
+11059,High,"Invalid Zod schema — computed property keys [z.string().toString()] don't work",YES,"Bug 3: minimumTokenResponseSchema computed keys (confidence 95)",
+11059,High,"parseRefreshTokenResponse returns safeParse result wrapper not credential object",YES,"Bug 1: safeParse result stored as credential key (confidence 90)",
+11059,High,"refreshFunction returns fetch Response but callers expect integration-specific token",YES,"Bug 2: raw Response returned to callers (confidence 85)",
+11059,High,"res.data doesn't exist on fetch Response — breaks Google Calendar sync path",YES,"Bug 2: res?.data undefined on fetch Response (confidence 85)",
+14943,High,"retryCount + 1 reads stale value — use atomic increment to avoid race condition",NO,,Found off-by-one threshold instead — missed concurrency angle
+14943,High,"Deletion deletes non-SMS reminders — missing method:SMS filter in OR clause",YES,"Bug 1: Unscoped deleteMany OR clause (confidence 90)",
+14740,High,"Case sensitivity bypass in email blacklist",NO,,Case sensitivity not detected
+14740,Critical,"&& instead of || in team admin/owner permission check",YES,"Bug 1: Authorization uses && not || (confidence 100)",
+14740,Medium,"Email sender called with original guests list not uniqueGuests",YES,"Bug 2: sendAddGuestsEmails receives wrong list (confidence 85)",
+14740,Medium,"uniqueGuests doesn't deduplicate within input — createMany inserts duplicate rows",NO,,Missing dedup not detected
+14740,Low,"Array initialized with [''] causes validation issues",NO,,Filtered out by confidence threshold
+22532,Medium,"updateManyByCredentialId uses empty data {} — @updatedAt won't trigger",YES,"Bug 1: Empty data object in updateMany (confidence 80)",
+22532,Low,"macOS-specific sed syntax (-i '') fails on Linux",YES,"Bug 2: sed -i '' is macOS-only (confidence 75)",

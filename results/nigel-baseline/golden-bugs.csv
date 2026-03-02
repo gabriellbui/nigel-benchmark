@@ -1,0 +1,32 @@
+PR,Severity,Golden Bug Description,Caught?,Nigel Finding,Miss Reason
+8087,Low,"Try-catch around await to handle import failures",YES,BUG 4: Silent swallowing of import failures,
+8087,Critical,"forEach with async callbacks causes fire-and-forget promises",YES,BUG 1: async forEach fire-and-forget (4 occurrences),
+10600,Low,"TwoFactor function in BackupCode.tsx — inconsistent naming",YES,Design Issue: Component named TwoFactor in BackupCode.tsx,
+10600,Low,"Error message mentions 'backup code login' but this is disable endpoint",NO,,Domain-specific text — too subtle for diff review
+10600,Medium,"Backup code validation case-sensitive (indexOf). Should be case-insensitive",NO,,Case sensitivity edge case — not in Nigel's checklist
+10600,High,"Concurrent backup code use — race condition on in-memory decrypt+mutate",NO,,Concurrency/TOCTOU pattern — not in Nigel's checklist
+10967,High,"Null reference if mainHostDestinationCalendar is undefined",YES,BUG 1: Null pointer crash — missing optional chaining,
+10967,Low,"Optional chaining on mainHostDestinationCalendar?.integration is redundant",NO,,Low-priority nit — redundant but not harmful
+10967,High,"Logic error: find(cal => externalId === externalCalendarId) always fails in else branch",YES,BUG 2: Dead-code logic — always resolves to undefined,
+10967,Medium,"Logic inversion in organization creation slug/requestedSlug conditions",YES,BUG 6: Organization slug negation logic inverted,
+10967,Low,"Calendar interface requires credentialId but some implementations don't accept it",YES,BUG 5: createEvent interface not honored by all implementations,
+22345,Low,"getBaseConditions else-if/else branches unreachable (authConditions always truthy)",YES,BUG 1: Dead branches in getBaseConditions,
+22345,Medium,"userIdsFromOrg only fetched when teamsFromOrg.length > 0 — excludes org-level members",NO,,Conditional guard excludes valid data — requires data model knowledge
+7232,Medium,"Async delete functions called without await inside forEach loops",YES,BUG 1: Fire-and-forget async calls (CRITICAL),
+7232,High,"immediateDelete=true cancels SendGrid but never deletes DB record — orphaned rows",YES,BUG 2: immediateDelete orphans DB records (CRITICAL),
+8330,Medium,"Incorrect end time calculation using slotStartTime instead of slotEndTime",YES,BUG 1: Copy-paste slotStartTime bug (CRITICAL),
+8330,Medium,"=== on dayjs objects compares references not values. Use .isSame()",YES,BUG 2: Object reference comparison (CRITICAL),
+11059,High,"parseRefreshTokenResponse sets refresh_token to hardcoded string 'refresh_token'",YES,BUG 6: Fake refresh token injection,
+11059,High,"Invalid Zod schema — computed property keys [z.string().toString()] don't work",YES,BUG 1: Broken Zod schema,
+11059,High,"parseRefreshTokenResponse returns safeParse result wrapper not credential object",YES,BUG 2: Throws but callers check .success,
+11059,High,"refreshFunction returns fetch Response but callers expect integration-specific token",YES,BUG 5: Inconsistent return types from refreshOAuthTokens,
+11059,High,"res.data doesn't exist on fetch Response — breaks Google Calendar sync path",YES,BUG 3: Google Calendar type mismatch,
+14943,High,"retryCount + 1 reads stale value — use atomic increment to avoid race condition",YES,BUG 3: Race condition — read-then-write without atomicity,
+14943,High,"Deletion deletes non-SMS reminders — missing method:SMS filter in OR clause",YES,BUG 1: deleteMany OR clause nukes all reminders (CRITICAL),
+14740,High,"Case sensitivity bypass in email blacklist",NO,,Case sensitivity in string comparison — not in Nigel's checklist
+14740,Critical,"&& instead of || in team admin/owner permission check",YES,BUG 1: Authorization check uses && instead of ||,
+14740,Medium,"Email sender called with original guests list not uniqueGuests",YES,BUG 2: Wrong list passed to sendAddGuestsEmails,
+14740,Medium,"uniqueGuests doesn't deduplicate within input — createMany inserts duplicate rows",NO,,Missing input deduplication — data integrity edge case
+14740,Low,"Array initialized with [''] causes validation issues",YES,BUG 3: multiEmailValue initialized with [''],
+22532,Medium,"updateManyByCredentialId uses empty data {} — @updatedAt won't trigger",YES,BUG 1: Empty update call does nothing,
+22532,Low,"macOS-specific sed syntax (-i '') fails on Linux",YES,NITPICK: Shell script sed is macOS-only,

@@ -1,0 +1,12 @@
+PR,Title,Golden Bugs,Caught,Missed,Recall
+8087,Async import of appStore packages,2,1,1,50%
+10600,2FA backup codes,4,0,4,0%
+10967,Collective multiple host destinationCalendar,5,2,3,40%
+22345,InsightsBookingService raw queries,2,0,2,0%
+7232,Workflow reminder management,2,2,0,100%
+8330,Date override timezone improvements,2,2,0,100%
+11059,OAuth credential sync,5,4,1,80%
+14943,SMS workflow retry tracking,2,1,1,50%
+14740,Guest management for bookings,5,2,3,40%
+22532,Calendar cache status,2,2,0,100%
+TOTAL,,31,16,15,51.6%

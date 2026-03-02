@@ -1,0 +1,8 @@
+PR,Severity,Missed Bug,Pattern Category,Improvement That Would Help
+10600,Low,Wrong error message context (login vs disable),Domain-specific text,Unlikely to fix with prompt changes
+10600,Medium,Case-sensitive indexOf on backup codes,Case sensitivity,Bug category checklist: boundary/edge cases
+10600,High,Concurrent backup code race condition,Concurrency/TOCTOU,Bug category checklist: concurrency & async
+10967,Low,Redundant optional chaining,Low-priority nit,Not worth targeting
+22345,Medium,Org members excluded by teamsFromOrg guard,Conditional data exclusion,Bug category checklist: data integrity
+14740,High,Case sensitivity bypass in email blacklist,Case sensitivity,Bug category checklist: boundary/edge cases
+14740,Medium,No dedup within input — duplicate createMany,Missing deduplication,Bug category checklist: data integrity

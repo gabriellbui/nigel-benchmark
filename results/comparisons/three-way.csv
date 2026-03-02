@@ -1,0 +1,12 @@
+PR,Title,Golden Bugs,Nigel (Opus) Caught,Nigel Recall,Code-Review Plugin (Sonnet) Caught,Plugin Recall,Delta
+8087,Async import of appStore packages,2,2,100%,1,50%,-1
+10600,2FA backup codes,4,1,25%,0,0%,-1
+10967,Collective multiple host destinationCalendar,5,4,80%,2,40%,-2
+22345,InsightsBookingService raw queries,2,1,50%,0,0%,-1
+7232,Workflow reminder management,2,2,100%,2,100%,0
+8330,Date override timezone improvements,2,2,100%,2,100%,0
+11059,OAuth credential sync,5,5,100%,4,80%,-1
+14943,SMS workflow retry tracking,2,2,100%,1,50%,-1
+14740,Guest management for bookings,5,3,60%,2,40%,-1
+22532,Calendar cache status,2,2,100%,2,100%,0
+TOTAL,,31,24,77.4%,16,51.6%,-8
