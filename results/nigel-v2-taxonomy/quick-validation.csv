@@ -1,0 +1,5 @@
+PR,Golden Bugs,Caught,Recall,Baseline Recall,Improvement,Time (s),Extra Findings
+10600,4,2,50%,25%,+1 bug,99.4,12
+14740,5,4,80%,60%,+1 bug,55.7,8
+22345,2,1,50%,50%,0 bugs,56.3,8
+TOTAL,11,7,63.6%,45.5%,+2 bugs,211.4,28
