@@ -13,28 +13,27 @@ Benchmark suite for [Nigel](https://github.com/vendurehq/ai-stack/tree/main/plug
 
 ### Headline numbers
 
-| Tool                     | Model        | Recall     | Critical+High Recall |
-| ------------------------ | ------------ | ---------- | -------------------- |
-| **Nigel (orchestrated)** | **Opus 4.6** | **87.1%**  | **100.0%**           |
-| Greptile                 | Unknown      | 82%        | --                   |
-| **Nigel (baseline avg)** | **Opus 4.6** | **65.6%**  | **71.4%**            |
-| Cursor                   | Unknown      | 58%        | --                   |
-| Copilot                  | Unknown      | 54%        | --                   |
-| Code-Review Plugin       | Sonnet 4.6   | 51.6%      | 71.4%                |
-| CodeRabbit               | Unknown      | 44%        | --                   |
-| Graphite                 | Unknown      | 6%         | --                   |
+| Tool                     | Model        | Recall    | Critical+High Recall |
+| ------------------------ | ------------ | --------- | -------------------- |
+| Greptile                 | Unknown      | 82%       | --                   |
+| **Nigel (baseline avg)** | **Opus 4.6** | **65.6%** | **71.4%**            |
+| Cursor                   | Unknown      | 58%       | --                   |
+| Copilot                  | Unknown      | 54%       | --                   |
+| Code-Review Plugin       | Sonnet 4.6   | 51.6%     | 71.4%                |
+| CodeRabbit               | Unknown      | 44%       | --                   |
+| Graphite                 | Unknown      | 6%        | --                   |
 
 Nigel's baseline recall (65.6%) is the mean of 3 isolated runs (run-1–run-3), scored with the extract→judge pipeline (pairwise matching, stricter than single-pass). The orchestrated run uses the review orchestrator for multi-pass analysis.
 
 ### Summary across runs
 
-| Run              | Recall     | Caught      | Critical      | High           | Medium       | Low          |
-| ---------------- | ---------- | ----------- | ------------- | -------------- | ------------ | ------------ |
-| run-1            | 61.3%      | 19/31       | 100.0% (2/2)  | 50.0% (6/12)   | 66.7% (6/9)  | 62.5% (5/8)  |
-| run-2            | 71.0%      | 22/31       | 100.0% (2/2)  | 83.3% (10/12)  | 66.7% (6/9)  | 50.0% (4/8)  |
-| run-3            | 64.5%      | 20/31       | 100.0% (2/2)  | 66.7% (8/12)   | 66.7% (6/9)  | 50.0% (4/8)  |
-| **Baseline avg** | **65.6%**  | **20.3/31** | **100.0%**    | **66.7%**      | **66.7%**    | **54.2%**    |
-| orchestrated-1   | 87.1%      | 27/31       | 100.0% (2/2)  | 100.0% (12/12) | 77.8% (7/9)  | 75.0% (6/8)  |
+| Run              | Recall    | Caught      | Critical     | High           | Medium      | Low         |
+| ---------------- | --------- | ----------- | ------------ | -------------- | ----------- | ----------- |
+| run-1            | 61.3%     | 19/31       | 100.0% (2/2) | 50.0% (6/12)   | 66.7% (6/9) | 62.5% (5/8) |
+| run-2            | 71.0%     | 22/31       | 100.0% (2/2) | 83.3% (10/12)  | 66.7% (6/9) | 50.0% (4/8) |
+| run-3            | 64.5%     | 20/31       | 100.0% (2/2) | 66.7% (8/12)   | 66.7% (6/9) | 50.0% (4/8) |
+| **Baseline avg** | **65.6%** | **20.3/31** | **100.0%**   | **66.7%**      | **66.7%**   | **54.2%**   |
+| orchestrated-1   | 87.1%     | 27/31       | 100.0% (2/2) | 100.0% (12/12) | 77.8% (7/9) | 75.0% (6/8) |
 
 ### Per-PR breakdown (run-1)
 
@@ -102,12 +101,12 @@ Nigel's baseline recall (65.6%) is the mean of 3 isolated runs (run-1–run-3), 
 
 ### Severity breakdown
 
-| Severity | Total | run-1        | run-2         | run-3        | Baseline Avg | orchestrated-1  |
-| -------- | ----- | ------------ | ------------- | ------------ | ------------ | --------------- |
-| Critical | 2     | 100.0% (2/2) | 100.0% (2/2)  | 100.0% (2/2) | 100.0%       | 100.0% (2/2)    |
-| High     | 12    | 50.0% (6/12) | 83.3% (10/12) | 66.7% (8/12) | 66.7%        | 100.0% (12/12)  |
-| Medium   | 9     | 66.7% (6/9)  | 66.7% (6/9)   | 66.7% (6/9)  | 66.7%        | 77.8% (7/9)     |
-| Low      | 8     | 62.5% (5/8)  | 50.0% (4/8)   | 50.0% (4/8)  | 54.2%        | 75.0% (6/8)     |
+| Severity | Total | run-1        | run-2         | run-3        | Baseline Avg |
+| -------- | ----- | ------------ | ------------- | ------------ | ------------ |
+| Critical | 2     | 100.0% (2/2) | 100.0% (2/2)  | 100.0% (2/2) | 100.0%       |
+| High     | 12    | 50.0% (6/12) | 83.3% (10/12) | 66.7% (8/12) | 66.7%        |
+| Medium   | 9     | 66.7% (6/9)  | 66.7% (6/9)   | 66.7% (6/9)  | 66.7%        |
+| Low      | 8     | 62.5% (5/8)  | 50.0% (4/8)   | 50.0% (4/8)  | 54.2%        |
 
 ## Running a new benchmark
 
