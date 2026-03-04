@@ -1,0 +1,82 @@
+## Review: SMS Workflow Reminder Retry Count Tracking
+
+**This needs work.** There's a data-destroying bug in the delete query, and the retry logic has some design issues that'll bite someone at 2am.
+
+---
+
+### Critical: Delete Query Nukes Non-SMS Reminders
+
+```js
+OR: [
+  {
+    method: WorkflowMethods.SMS,
+    scheduledDate: {
+      lte: dayjs().toISOString(),
+    },
+  },
+  {
+    retryCount: {
+      gt: 1,
+    },
+  },
+],
+```
+
+The second `OR` clause has **no method filter**. This deletes *any* `WorkflowReminder` with `retryCount > 1` — email, WhatsApp, whatever. The original query was scoped to `SMS`; this blows that wide open. If other reminder types ever use `retryCount`, they'll get silently wiped.
+
+Needs at minimum:
+
+```js
+{
+  method: WorkflowMethods.SMS,
+  retryCount: {
+    gt: 1,
+  },
+},
+```
+
+Even then, I'd question whether deletion is the right cleanup strategy vs. marking a terminal status, but that's a bigger discussion.
+
+---
+
+### Design Issues
+
+**Magic number `1`** — `retryCount: { gt: 1 }` encodes a max-retry policy as a bare literal buried in a delete query. This should be a named constant (`MAX_SMS_RETRY_ATTEMPTS` or similar). Right now someone reading this has to reverse-engineer what "1" means: is it 1 retry? 2 retries? (It's 2 total attempts — original + 1 retry — because the delete runs at the top of the cron before scheduling.)
+
+**Duplicated retry increment** — The `prisma.workflowReminder.update` for incrementing `retryCount` appears identically in both the `else` branch (line ~178) and the `catch` block (line ~189). Extract it or at least acknowledge why it's duplicated. These two paths are mutually exclusive (falsy return vs. thrown error), but the copy-paste will drift over time when someone updates one and not the other.
+
+```js
+// Appears twice, identically:
+await prisma.workflowReminder.update({
+  where: { id: reminder.id },
+  data: { retryCount: reminder.retryCount + 1 },
+});
+```
+
+---
+
+### Error Handling Concern
+
+The retry count update in the `catch` block can itself throw, and there's no inner try/catch. If the DB is temporarily unreachable (which is why the SMS scheduling might have failed in the first place), this update fails silently, the reminder stays at its current retry count, and you get an infinite retry loop — the exact thing this PR is trying to prevent.
+
+---
+
+### Minor Nits
+
+- The type assertion `as (PartialWorkflowReminder & { retryCount: number })[]` is pragmatic but signals the `select` pattern doesn't compose cleanly with TypeScript. Not a blocker, just tech debt.
+- `retryCount` on the schema is generic but only SMS scheduling uses it. If this is intentionally SMS-only behavior, the field name doesn't communicate that. If it's meant to be reused by email/WhatsApp handlers later, the delete query (even when fixed) is premature.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix:**
+1. Add `method: WorkflowMethods.SMS` to the retry count delete clause — this is a data loss bug
+2. Extract the magic number into a constant
+
+**Should fix:**
+3. Deduplicate the retry increment logic
+4. Wrap the catch-block DB update in its own try/catch to prevent silent infinite retries
+
+**Nitpick:**
+5. Consider whether `retryCount` should be scoped (naming or documentation) to clarify its intended scope across reminder methods

@@ -1,0 +1,6 @@
+severity,total,caught,missed,recall
+Critical,2,2,0,100.0%
+High,12,10,2,83.3%
+Medium,9,6,3,66.7%
+Low,8,4,4,50.0%
+TOTAL,31,22,9,71.0%

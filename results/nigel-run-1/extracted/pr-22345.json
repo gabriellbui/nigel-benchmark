@@ -1,0 +1,11 @@
+{
+  "issues": [
+    "getBaseConditions has dead code branches because authConditions is always truthy (returns Prisma.Sql, never null), making the else if (filterConditions) and else branches unreachable. The branching logic misleadingly suggests optionality that doesn't exist.",
+    "The reduce pattern for joining SQL conditions with OR is duplicated identically across buildFilterConditions, buildOrgAuthorizationCondition, and buildTeamAuthorizationCondition. This should be extracted into a shared helper like joinSql(conditions, 'AND' | 'OR').",
+    "buildOrgAuthorizationCondition does not guard against an empty teamIds array before using it in ANY(ARRAY[]), while buildTeamAuthorizationCondition does guard userIdsFromTeam with a length > 0 check. The handling of empty arrays is inconsistent.",
+    "InsightsBookingServicePublicOptions replaces the Zod-validated discriminated union InsightsBookingServiceOptions as the constructor input type, bypassing Zod validation entirely. The discriminated union enforced that team scope requires teamId, but now teamId is optional on all scopes, which is a regression in type safety.",
+    "The findMany method was removed, turning the service from a query executor into a condition fragment factory. Callers now must know the table name, write raw SQL, and compose queries themselves, leaking the table name into every call site and pushing complexity outward.",
+    "The entire describe(\"Caching\") test block was deleted, but the caching mechanism (cachedAuthConditions, cachedFilterConditions) still exists in the service. The tests should have been updated rather than removed.",
+    "Tests assert on exact SQL fragment internals of Prisma.Sql objects, making them fragile to any change in whitespace, parenthesization, or parameter ordering without any actual behavior change."
+  ]
+}

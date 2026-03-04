@@ -1,0 +1,14 @@
+{
+  "issues": [
+    "Using `===` to compare two Dayjs objects compares object references, not values, so the comparison will never be true. This makes the entire branch dead code that silently does nothing. `.isSame()` should be used instead.",
+    "Both `start` and `end` variables are computed from `slotStartTime` instead of `end` using `slotEndTime`. This means the working hours boundary check is wrong, allowing slots that extend past working hours to pass through unchecked.",
+    "The `checkIfIsAvailable` function has grown to handle date override logic, working hours validation, and organizer timezone resolution all in one function with a side-effecting mutable flag (`dateOverrideExist`), making it overly complex and fragile.",
+    "Using `.find()` both for its return value and for a side effect on an outer variable (`dateOverrideExist = true` inside the callback) creates confusing control flow that works by accident. The logic for checking if an override exists for the day and whether the slot fits within the override should be split into separate steps.",
+    "Timezone offset calculation is duplicated with two different approaches in `packages/lib/slots.ts` and `checkIfIsAvailable`, creating risk of drift bugs where one gets fixed and the other doesn't. This should be extracted into a shared utility.",
+    "Adding `timeZone` as an optional property to the `TimeRange` type contaminates a clean domain type. Timezone is context about where the range was defined, not an intrinsic property of a time range. A wrapper type or passing timezone alongside overrides would be cleaner.",
+    "The same `dayjs(override.start).utc().add(offset, \"minute\")` expression is constructed four times (twice for start, twice for end) instead of being assigned to a variable.",
+    "Using `!!activeOverrides.length` instead of `activeOverrides.length > 0` is less clear. The double-bang on a number is a code smell that makes readers pause.",
+    "Comments describe what the code does rather than why. The business logic for why the date override check happens before the working hours check, or why the override check returns `false` when outside the override window, is non-obvious and undocumented.",
+    "Whitespace-only changes in unrelated parts of the file add noise to the diff and make `git blame` less useful for no benefit."
+  ]
+}

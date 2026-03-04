@@ -1,0 +1,17 @@
+{
+  "issues": [
+    "Reference comparison (`===`) on two separate `dayjs()` objects in `checkIfIsAvailable` always evaluates to false because it compares object references, not values. This makes zero-length date override detection dead code, causing slots to be incorrectly marked as available when they should be unavailable.",
+    "Copy-paste error where both `start` and `end` variables are computed from `slotStartTime` instead of `end` using `slotEndTime`. This makes the working hours end-time boundary check ineffective, allowing events to overflow past working hours.",
+    "Side-effect mutation of `dateOverrideExist` flag inside an `Array.find()` callback conflates two separate pieces of logic (finding a matching override and determining slot availability) into one iteration, making the control flow hard to follow and test.",
+    "Manual timezone offset arithmetic (computing organizer/invitee UTC offset differences and applying them as minute additions) instead of using dayjs's built-in timezone conversion. This approach is fragile and does not correctly handle DST transitions at boundaries.",
+    "The expression `dayjs(override.start).utc().add(offset, \"minute\")` appears four times with no extraction into a named variable.",
+    "`dayjs(override.start.toString())` calls `.toString()` unnecessarily since dayjs natively handles `Date` objects. If there is a serialization edge case requiring string conversion, it is unexplained.",
+    "`organizerTimeZone` has inconsistent semantics across call sites \u2014 in `getSchedule()` it comes from a resolved fallback chain, but in calls to `checkIfIsAvailable` it comes from different sources depending on the call site, with no distinction in naming.",
+    "`checkIfIsAvailable` has grown from 4 to 8 parameters with three separate return-path responsibilities and interleaved early returns, accumulating too many concerns (busy times, date overrides with timezone conversion, working hours boundary checks) in a single function.",
+    "Comments like `//check if date override for slot exists` restate what the code does rather than explaining why the date override check must precede the working hours check or what happens at timezone boundaries.",
+    "Missing space after `//` in comments, violating codebase style conventions.",
+    "Test coverage is severely insufficient: only one test with a single positive UTC offset. No tests for negative UTC offsets, midnight-crossing overrides, zero-length overrides, working hours boundary cases, DST transitions, or direct tests for `checkIfIsAvailable`.",
+    "Whitespace-only diff changes add noise to the PR.",
+    "The PR addresses timezone bugs by injecting offset arithmetic at every consumption point rather than fixing the underlying data model, which stores times as UTC without preserving the timezone context needed for correct interpretation."
+  ]
+}

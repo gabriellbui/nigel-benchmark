@@ -1,0 +1,40 @@
+{
+  "matches": [
+    {
+      "bug_idx": 1,
+      "match": true,
+      "confidence": 0.99,
+      "evidence": "Uses `&&` (AND) instead of `||` (OR). As written, `isTeamAdminOrOwner` is only `true` if the user is **both** a team admin **and** a team owner simultaneously. An admin who isn't an owner is silently excluded. Should be `||`.",
+      "reasoning": "The review explicitly identifies the exact same defect: the AND (&&) operator should be OR (||) in the team admin/owner permission check."
+    },
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "The blacklist `.toLowerCase()`s its entries but the incoming `guest` is never lowercased -- so `BLOCKED@EXAMPLE.COM` slips past.",
+      "reasoning": "The review explicitly identifies that the email blacklist check can be bypassed via case sensitivity because incoming guest emails are not lowercased before comparison against the lowercased blacklist entries."
+    },
+    {
+      "bug_idx": 2,
+      "match": false,
+      "confidence": 0.9,
+      "evidence": "",
+      "reasoning": "The golden bug is about passing the full/original guest list (including existing attendees) to the email sender instead of only newly added guests, causing incorrect notifications; the review discusses email-related issues (missing org settings, case normalization, swallowed errors) but never identifies that the wrong guest list is passed to sendAddGuestsEmails."
+    },
+    {
+      "bug_idx": 4,
+      "match": false,
+      "confidence": 0.85,
+      "evidence": "",
+      "reasoning": "The review discusses MultiEmail component issues (prop mutation, key={index}, hardcoded English) but never identifies the specific defect of initializing state with an array containing an empty string [\"\"] instead of an empty array [], which is the golden bug's root cause."
+    },
+    {
+      "bug_idx": 3,
+      "match": true,
+      "confidence": 0.72,
+      "evidence": "Two schemas, different files, different rules. Client checks uniqueness, server doesn't. ... The uniqueness check belongs in the shared schema",
+      "reasoning": "The review identifies that the server-side schema lacks the uniqueness check present on the client, meaning duplicate emails in the input are not deduplicated server-side and can create duplicate attendee rows \u2014 the same root defect as the golden bug, though framed as a schema validation gap rather than a flaw in the uniqueGuests filter logic."
+    }
+  ],
+  "bugs": 5
+}

@@ -1,0 +1,144 @@
+## Nigel's Review: `feat: add calendar cache status and actions (#22532)`
+
+### Overall Assessment: This needs work.
+
+The feature itself is reasonable — exposing cache status and giving users a way to nuke stale cache is genuinely useful. The architecture follows existing patterns in some places but cuts corners in others. There is one confirmed bug that undermines the core purpose of the feature, several design inconsistencies, and a script that has no business being in this PR.
+
+---
+
+### BUG 1 (Must Fix): Empty data object in `updateManyByCredentialId` — the feature's timestamp tracking is broken
+
+**File:** `packages/app-store/googlecalendar/lib/CalendarService.ts`
+
+```typescript
+// Update SelectedCalendar.updatedAt for all calendars under this credential
+await SelectedCalendarRepository.updateManyByCredentialId(this.credential.id, {});
+```
+
+This is the linchpin of the entire feature and it does not work. Prisma's `@updatedAt` decorator only fires when Prisma detects actual data changes in an `update` call. Passing an empty object `{}` as the data argument means Prisma has nothing to update, and `@updatedAt` will not trigger. This is not hypothetical — it is documented Prisma behavior.
+
+The irony is beautiful: you added the `updateManyByCredentialId` method, wired up the cache status display, built the dropdown UI, wrote the i18n strings... and the timestamp that the entire feature reads from never actually gets written to.
+
+**Fix:** Pass explicit data: `{ updatedAt: new Date() }` instead of `{}`.
+
+---
+
+### DESIGN ISSUE 1 (Must Fix): `deleteCache.handler.ts` bypasses the repository pattern
+
+**File:** `packages/trpc/server/routers/viewer/calendars/deleteCache.handler.ts`
+
+```typescript
+await prisma.calendarCache.deleteMany({
+  where: { credentialId },
+});
+```
+
+The codebase already has `CalendarCacheRepository` with a `deleteManyByCredential` method (visible in the mock at `calendar-cache.repository.mock.ts`). The `connectedCalendars.handler.ts` in this very same PR correctly uses `CalendarCacheRepository` for reads. But the delete handler goes straight to Prisma.
+
+The repository pattern exists here specifically because there is a mock implementation (`CalendarCacheRepositoryMock`) that gets swapped in when calendar caching is disabled. Bypassing it means this handler will attempt to delete from a table the rest of the system may not even be interacting with.
+
+**Fix:** Use `CalendarCacheRepository.deleteManyByCredential` instead of raw Prisma.
+
+---
+
+### DESIGN ISSUE 2 (Must Fix): Missing cache invalidation on `deleteCacheMutation`
+
+**File:** `packages/features/apps/components/CredentialActionsDropdown.tsx`
+
+The delete cache mutation shows a success toast but never invalidates `connectedCalendars`. So the dropdown will still show the old `cacheUpdatedAt` timestamp until the user manually refreshes. Compare with `disconnectMutation` right below, which properly adds:
+
+```typescript
+async onSettled() {
+  await utils.viewer.calendars.connectedCalendars.invalidate();
+}
+```
+
+The `onSuccess?.()` callback might trigger a parent refetch, but that's fragile and inconsistent with the established pattern.
+
+---
+
+### SCOPE ISSUE (Must Remove or Separate): `test-gcal-webhooks.sh` and `dev:cron` change
+
+`scripts/test-gcal-webhooks.sh` is a 79-line developer tooling script for Tunnelmole tunnels — nothing to do with cache status. It uses macOS-specific `sed -i ''` syntax (will fail on Linux), writes to `/tmp`, and manages tunnel processes. Similarly, the `ts-node` → `npx tsx` change in `package.json` is unrelated. Both should be in their own PRs.
+
+---
+
+### DESIGN ISSUE 3 (Should Fix): Throws generic `Error` instead of `TRPCError`
+
+**File:** `packages/trpc/server/routers/viewer/calendars/deleteCache.handler.ts`
+
+```typescript
+if (!credential) {
+  throw new Error("Credential not found or access denied");
+}
+```
+
+In a tRPC handler, throw `TRPCError` with code `NOT_FOUND` or `FORBIDDEN`. Plain `Error` surfaces as `INTERNAL_SERVER_ERROR` (500) to the client, which is misleading.
+
+---
+
+### DESIGN ISSUE 4 (Should Fix): Always queries cache status for all calendars
+
+**File:** `packages/trpc/server/routers/viewer/calendars/connectedCalendars.handler.ts`
+
+Fires a `groupBy` query against `CalendarCache` for every connected calendar, every time. For users with only Outlook or Apple Calendar, this returns nothing and is pure waste. The feature only uses `cacheUpdatedAt` for Google Calendar. Filter `credentialIds` to Google Calendar credentials before querying, or short-circuit entirely.
+
+---
+
+### DESIGN ISSUE 5 (Should Fix): Hardcoded `"en-US"` locale in `DateTimeFormat`
+
+**File:** `packages/features/apps/components/CredentialActionsDropdown.tsx`
+
+```typescript
+new Intl.DateTimeFormat("en-US", { dateStyle: "short", timeStyle: "short" })
+```
+
+This is an internationalized application. The i18n strings use `useLocale()` properly, but the date is hardcoded American format. A French or Japanese user will see localized text wrapping an American-formatted date.
+
+---
+
+### DESIGN ISSUE 6 (Should Fix): Hardcoded Tailwind color classes
+
+**File:** `packages/features/apps/components/CredentialActionsDropdown.tsx`
+
+```typescript
+<div className="text-sm font-medium text-gray-900 dark:text-white">
+<div className="text-xs text-gray-500 dark:text-white">
+```
+
+The cal.com codebase uses semantic tokens like `text-default`, `text-subtle`, `text-emphasis`. Using raw `text-gray-900` and `text-gray-500` bypasses the theming system. When someone updates the palette, these won't follow.
+
+---
+
+### DESIGN ISSUE 7 (Nitpick): Unnecessary `googleChannelId` in `UserWithCalendars` type
+
+**File:** `packages/lib/getConnectedDestinationCalendars.ts`
+
+Adding `updatedAt` makes sense. But `googleChannelId` is not used anywhere in the cache status display flow. Don't widen shared types speculatively.
+
+---
+
+### MIGRATION NOTE: `DEFAULT NOW()` is fine but comment is misleading
+
+The SQL itself is correct — PostgreSQL's `NOW()` as a column default is evaluated per-row at insert time. But the auto-generated Prisma warning in the migration file says "without a default value" while the actual SQL has one. Misleading comments are worse than no comments.
+
+---
+
+### Prioritized Summary
+
+**Must Fix (blocking):**
+1. Pass `{ updatedAt: new Date() }` instead of `{}` to `updateManyByCredentialId` — feature literally does not work without this
+2. Use `CalendarCacheRepository` in `deleteCache.handler.ts` instead of raw Prisma
+3. Add `connectedCalendars.invalidate()` to `deleteCacheMutation.onSettled`
+4. Remove `test-gcal-webhooks.sh` and `dev:cron` change — unrelated scope
+
+**Should Fix:**
+5. Throw `TRPCError` instead of plain `Error` in delete handler
+6. Filter to Google Calendar credential IDs before querying cache status
+7. Use user's locale for `DateTimeFormat` instead of hardcoded `"en-US"`
+8. Use semantic color tokens instead of raw gray values
+9. Remove unnecessary `googleChannelId` from `UserWithCalendars` type
+
+**Nitpick:**
+10. Fix misleading auto-generated comment in migration file
+11. Improve comment in `GoogleCalendarService.ts` to explain *why* not *what*

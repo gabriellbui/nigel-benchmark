@@ -1,0 +1,122 @@
+# Code Review: PR #8087 "Async import of the appStore packages"
+
+## Overall Assessment: This needs serious work. There are production-breaking bugs in here.
+
+This PR has the right idea but the execution is sloppy enough to cause silent data loss in production. The `async forEach` pattern appears in multiple places and will silently swallow errors and fail to await operations. There's also a fundamental mismatch between the type of change made to the appStore (eager promises, not lazy loading) and what was likely the actual goal.
+
+---
+
+## 1. CRITICAL: `async forEach` — Silent Fire-and-Forget
+
+This is the worst problem. It appears in **three files** and will cause **silent failures in production**.
+
+**`packages/app-store/vital/lib/reschedule.ts`** ~line 125:
+```javascript
+bookingRefsFiltered.forEach(async (bookingRef) => {
+  if (bookingRef.uid) {
+    if (bookingRef.type.endsWith("_calendar")) {
+      const calendar = await getCalendar(credentialsMap.get(bookingRef.type));
+      return calendar?.deleteEvent(bookingRef.uid, builder.calendarEvent);
+```
+
+**`packages/app-store/wipemycalother/lib/reschedule.ts`** — identical pattern.
+
+**`packages/trpc/server/routers/viewer/bookings.tsx`** ~line 553:
+```javascript
+bookingRefsFiltered.forEach(async (bookingRef) => {
+  if (bookingRef.uid) {
+    if (bookingRef.type.endsWith("_calendar")) {
+      const calendar = await getCalendar(credentialsMap.get(bookingRef.type));
+      return calendar?.deleteEvent(
+```
+
+`Array.forEach` does not await the return value of its callback. Every one of these `async` callbacks becomes fire-and-forget. The `try/catch` wrapping the `forEach` will **never catch** errors from these callbacks because the promises are unhandled.
+
+**Impact:** Calendar events may fail to delete silently. Video meetings may fail to clean up. The surrounding `try/catch` is now decorative.
+
+The author actually did this correctly in `packages/features/bookings/lib/handleCancelBooking.ts` ~line 476 where they converted to `for...of`. They knew the right pattern — they just didn't apply it consistently.
+
+---
+
+## 2. CRITICAL: `getCalendarCredentials` Not Updated
+
+**`packages/core/CalendarManager.ts`** ~line 28:
+```javascript
+export const getCalendarCredentials = (credentials: Array<CredentialPayload>) => {
+    // ...
+    const calendar = getCalendar(credential);  // getCalendar is now async!
+    return app.variant === "calendar" ? [{ integration: app, credential, calendar }] : [];
+```
+
+`getCalendar` now returns `Promise<Calendar | null>`. This call site was **not updated**. The `calendar` field silently becomes a Promise.
+
+The downstream consumer in `getConnectedCalendars` patches over this:
+```javascript
+const { integration, credential } = item;
+const calendar = await item.calendar;
+```
+
+This works by accident — it awaits the promise that was accidentally stuffed into the `calendar` field. But the type system is lying. Any future consumer of `getCalendarCredentials` will get a Promise where they expect a Calendar and TypeScript won't warn them.
+
+---
+
+## 3. DESIGN ISSUE: This Isn't Actually Lazy Loading
+
+**`packages/app-store/index.ts`:**
+```javascript
+const appStore = {
+  applecalendar: import("./applecalendar"),
+  caldavcalendar: import("./caldavcalendar"),
+  // ...27 more
+};
+```
+
+Every `import()` fires **immediately** when this module loads. All 29 imports are kicked off eagerly, in parallel. This is async loading, not lazy loading. You've paid the full cost upfront — just non-blocking instead of synchronous.
+
+If the goal was true lazy loading (only load Stripe for payments, only load Google Calendar for syncing), the approach should be thunks:
+```typescript
+const appStore = {
+  applecalendar: () => import("./applecalendar"),
+};
+```
+
+With the current approach, you load all 29 every time, just asynchronously.
+
+---
+
+## 4. Missing Error Handling on Dynamic Imports
+
+None of the `await appStore[...]` calls handle import failures. Static imports fail at build time. Dynamic imports can fail at **runtime** per-request (syntax error, missing dependency, network issue in edge runtime). This is a reliability regression.
+
+---
+
+## 5. Inconsistent Patterns
+
+| File | Pattern | Correct? |
+|---|---|---|
+| `handleCancelBooking.ts` ~476 | `for...of` | Yes |
+| `handleCancelBooking.ts` ~458 | `forEach(async ...)` | **No** |
+| `vital/lib/reschedule.ts` | `forEach(async ...)` | **No** |
+| `wipemycalother/lib/reschedule.ts` | `forEach(async ...)` | **No** |
+| `bookings.tsx` ~553 | `forEach(async ...)` | **No** |
+| `videoClient.ts` | `for...of` | Yes |
+
+---
+
+## Prioritized Recommendations
+
+### Must Fix (production bugs):
+1. **Replace every `forEach(async ...)` with `for...of` or `Promise.all(arr.map(...))`** — 4 locations, causing silent data loss
+2. **Fix `getCalendarCredentials`** — either make it async or explicitly type `calendar` as `Promise<Calendar | null>`
+3. **Add error handling around `await appStore[...]`** — dynamic imports can reject at runtime
+
+### Should Fix (design):
+4. **Reconsider eager-import-as-promise** — use thunks for true lazy loading if that's the goal
+5. **Ensure iteration consistency** across all files
+
+### Nitpick:
+6. Remove stray blank line in `CalendarManager.ts`
+
+---
+
+**Bottom Line:** The core concept is reasonable — moving away from synchronous static imports of 29 integration packages. But the execution has at least two categories of production bugs (`async forEach`, un-updated `getCalendarCredentials`), and the architectural choice doesn't actually deliver lazy loading. This touches calendar sync, video conferencing, and payment processing — three things where silent failures mean missed meetings and lost revenue. It needs another pass.

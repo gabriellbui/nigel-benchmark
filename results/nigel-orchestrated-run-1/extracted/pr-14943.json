@@ -1,0 +1,12 @@
+{
+  "issues": [
+    "The second OR branch in the deleteMany query has no method filter, so it will delete any WorkflowReminder with retryCount > 1 regardless of method (SMS, email, etc.), causing unintended data loss when other methods add retry tracking.",
+    "The delete query's second OR branch deletes reminders with retryCount > 1 even if their scheduledDate hasn't passed yet, removing reminders before they've had a real chance to be sent.",
+    "The retryCount increment uses a read-then-write pattern (reminder.retryCount + 1) instead of Prisma's atomic increment, causing a race condition where concurrent cron executions can read the same value and lose an increment.",
+    "The catch block performs a database update that can itself throw an unhandled exception (e.g., if the DB is down or the reminder was already deleted), which would crash the handler and prevent processing of remaining reminders in the batch.",
+    "The retry limit value 1 in retryCount > 1 is a magic number with no documentation or named constant explaining why 2 attempts was chosen.",
+    "The identical 7-line prisma.workflowReminder.update block for incrementing retryCount is duplicated in both the else branch and the catch block, creating a maintenance risk when retry logic changes.",
+    "The console.log in the catch block does not include the retryCount value, making it difficult to trace why reminders are disappearing after reaching max retries.",
+    "SMS reminders use hard-delete while email reminders use soft-delete (cancelled: true), and the PR adds retry tracking only to SMS with no comment acknowledging this inconsistency."
+  ]
+}

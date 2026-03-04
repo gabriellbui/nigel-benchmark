@@ -1,0 +1,19 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "Passing an empty object to `updateMany` to trigger Prisma's `@updatedAt` is clever in the worst way. Anyone reading this without the comment will think it's a no-op. ... If you need to touch `updatedAt`, set it explicitly: await SelectedCalendarRepository.updateManyByCredentialId(this.credential.id, { updatedAt: new Date() });",
+      "reasoning": "The review explicitly identifies the same defect: the empty data object in updateManyByCredentialId fails to properly update the updatedAt timestamp, and recommends the same fix of explicitly setting updatedAt."
+    },
+    {
+      "bug_idx": 1,
+      "match": true,
+      "confidence": 0.95,
+      "evidence": "uses macOS-specific `sed -i ''`",
+      "reasoning": "The review explicitly identifies the macOS-specific `sed -i ''` syntax in the webhook testing script, which is the same cross-platform compatibility defect described in the golden bug."
+    }
+  ],
+  "bugs": 2
+}

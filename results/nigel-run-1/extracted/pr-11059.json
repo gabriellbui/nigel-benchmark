@@ -1,0 +1,17 @@
+{
+  "issues": [
+    "The Zod schema in parseRefreshTokenResponse uses z.string().toString() which evaluates to the literal string key \"ZodString\", not a dynamic catch-all. The schema validates nothing useful beyond access_token and should use z.object({ access_token: z.string() }).passthrough() instead.",
+    "parseRefreshTokenResponse silently injects the literal string \"refresh_token\" as the token value when no refresh token is present. This sentinel value will break on the next refresh cycle when used against the OAuth provider.",
+    "The webhook endpoint in app-credential.ts uses plain string comparison (!==) for secret validation instead of crypto.timingSafeEqual(), making it vulnerable to timing attacks.",
+    "The webhook endpoint passes an empty string fallback to symmetricDecrypt when the CALCOM_APP_CREDENTIAL_ENCRYPTION_KEY env var is missing, which will either throw a cryptic error or succeed with a weak/empty key. It should fail explicitly.",
+    "refreshOAuthTokens adds indirection without removing complexity \u2014 callers still need to wrap refresh logic in a lambda, pass appSlug as a magic string, know about credential.userId, and handle response normalization differently.",
+    "APP_CREDENTIAL_SHARING_ENABLED evaluates to string | undefined rather than boolean, meaning it could leak the actual secret string into a constant imported everywhere. It should be wrapped in Boolean() or !!.",
+    "parseRefreshTokenResponse is applied inconsistently \u2014 used in Google Calendar, Office365 Calendar, Zoom, and Salesforce but not in HubSpot, Lark, Webex, Zoho Bigin, or Zoho CRM, with no documentation explaining why.",
+    "Salesforce gets completely different treatment with a manual fetch + parseRefreshTokenResponse block instead of using refreshOAuthTokens like every other integration.",
+    "Office365 Calendar error handling regresses \u2014 the old zod error logging was removed, and the control flow between parseRefreshTokenResponse throwing on failure and the caller checking tokenResponse.success is confused.",
+    "The webhook handler in app-credential.ts has an empty JSDoc comment (/** */) that is just noise.",
+    "The webhook handler does not verify req.method === \"POST\", so any HTTP method will be accepted.",
+    "zoho-bigin/api/add.ts changed from a dynamic slug (appConfig.slug) to a hardcoded \"zoho-bigin\" string, an undocumented behavioral change mixed into a refactoring PR.",
+    "File reorganization moving encodeOAuthState, decodeOAuthState, and createOAuthAppCredential into an oauth/ subdirectory touches ~20 files for what amounts to a folder rename, adding churn for minimal benefit."
+  ]
+}

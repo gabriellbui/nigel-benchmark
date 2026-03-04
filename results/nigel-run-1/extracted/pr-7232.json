@@ -1,0 +1,15 @@
+{
+  "issues": [
+    "Inconsistent cancellation semantics between email and SMS: deleteScheduledEmailReminder has three different behaviors depending on arguments (immediate DB delete, SendGrid cancel with no DB cleanup, or soft-cancel), while deleteScheduledSMSReminder always does immediate DB delete + Twilio cancel.",
+    "The immediateDelete path in deleteScheduledEmailReminder cancels via SendGrid then returns without deleting or marking the WorkflowReminder row as cancelled, permanently leaking database records that the cron job will never clean up.",
+    "Fire-and-forget async calls in .forEach() across at least 5 locations: async functions doing DB writes and external API calls have their returned promises discarded, meaning errors vanish and operations may not complete before the response is sent. Should use Promise.all + .map() instead.",
+    "The try/catch in handleNewBooking.ts (lines 963-978) catches nothing because forEach with async callbacks fires and forgets \u2014 rejections become unhandled promise rejections, not caught exceptions.",
+    "Security regression in workflows.tsx: the previous code verified user ownership when deleting reminders (booking: { userId: ctx.user.id }), but the new code calls deleteScheduledEmailReminder with just the reminder id and referenceId, removing the defense-in-depth authorization check.",
+    "The cancelled column in the Prisma schema is a nullable Boolean (Boolean?), creating unnecessary three-state complexity (true/false/null). It should be Boolean @default(false) since both null and false implicitly mean 'not cancelled'.",
+    "SMS reminders have no deferred cancellation path: the cron job only handles email cancellations, while SMS reminders are always deleted immediately, making the soft-cancel pattern inconsistently applied.",
+    "No database index on the new cancelled column. The cron query filtering WHERE cancelled = true AND scheduledDate <= ... will table-scan the WorkflowReminder table on every invocation, degrading performance as the table grows.",
+    "Unrelated UI change bundled in: WorkflowStepContainer.tsx removes the isSenderIdNeeded condition, which is a separate behavioral change from reminder management and should be in its own PR.",
+    "60+ lines of whitespace-only changes at the bottom of workflows.tsx (re-indented commented-out code) create diff noise with zero functional purpose.",
+    "Import style regression in handleNewBooking.ts: changed import type { App, Credential, ... } to a runtime import, but these Prisma types should remain type-only imports for proper tree-shaking."
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.99,
+      "evidence": "If `destinationCalendar` is `null` or empty array, `mainHostDestinationCalendar` is `undefined`, and accessing `.integration` on it throws. The old code had optional chaining (`evt.destinationCalendar?.integration`); this rewrite removed the safety without adding a guard. This is a runtime crash waiting to happen.",
+      "reasoning": "The review explicitly identifies the null dereference on mainHostDestinationCalendar when evt.destinationCalendar is null or empty array, which is exactly the golden bug."
+    },
+    {
+      "bug_idx": 1,
+      "match": false,
+      "confidence": 0.95,
+      "evidence": "If destinationCalendar is null or empty array, mainHostDestinationCalendar is undefined, and accessing .integration on it throws.",
+      "reasoning": "The golden bug says optional chaining is redundant (unnecessary), while the review claims the opposite \u2014 that removing optional chaining creates a null dereference risk; these are opposite diagnoses of the same code area, not the same defect."
+    },
+    {
+      "bug_idx": 3,
+      "match": true,
+      "confidence": 0.9,
+      "evidence": "These are **not semantically equivalent**. The original spreads `slug` when billing is **disabled**. The replacement spreads `slug` when billing is **enabled**. This is either an intentional logic inversion (in which case it belongs in its own PR with explanation) or a bug.",
+      "reasoning": "The review identifies the exact same logic inversion defect \u2014 slug is now conditionally set when IS_TEAM_BILLING_ENABLED is true instead of when it's false \u2014 though it does not mention the additional consequence regarding requestedSlug also being set, it correctly diagnoses the core root cause."
+    },
+    {
+      "bug_idx": 4,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "`createEvent` signature change breaks the interface contract inconsistently \u2014 `packages/types/Calendar.d.ts` now requires `createEvent(event: CalendarEvent, credentialId: number)` but `office365calendar` and `larkcalendar` still have the old signature `async createEvent(event: CalendarEvent)`. Only `GoogleCalendarService` was updated to accept `credentialId`.",
+      "reasoning": "The review explicitly identifies the same defect: the Calendar interface requires createEvent(event, credentialId) but Lark and Office365 implementations still declare createEvent(event) only, breaking the interface contract."
+    },
+    {
+      "bug_idx": 2,
+      "match": false,
+      "confidence": 0.65,
+      "evidence": "If externalCalendarId is falsy, you hit the else branch... which searches for a calendar matching externalCalendarId \u2014 which is falsy. This will always return undefined in the else branch. The .find() is dead code.",
+      "reasoning": "The review diagnoses the .find() as 'dead code' because it only executes when externalCalendarId is falsy, while the golden bug diagnoses it as a 'wrong comparison' that should use credentialId instead \u2014 these are different root cause analyses of the same code area, and per the rules 'dead code' vs 'wrong comparison' are distinct diagnoses even when about the same line."
+    }
+  ],
+  "bugs": 5
+}

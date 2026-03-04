@@ -1,0 +1,100 @@
+## Needs Serious Work
+
+This PR has a critical data-safety bug that would delete reminders it shouldn't, plus several design issues that'll bite you in production.
+
+---
+
+### Critical: Unscoped Delete Nukes Non-SMS Reminders
+
+```ts
+OR: [
+  {
+    method: WorkflowMethods.SMS,
+    scheduledDate: {
+      lte: dayjs().toISOString(),
+    },
+  },
+  {
+    retryCount: {
+      gt: 1,
+    },
+  },
+],
+```
+
+The second OR branch has **no method filter and no date filter**. This will delete *every* `WorkflowReminder` in the table with `retryCount > 1` — email reminders, WhatsApp reminders, future reminders, all of it. The original query was scoped to `SMS` + past date. This OR blows that scoping wide open.
+
+At minimum, the second branch needs `method: WorkflowMethods.SMS`. But honestly, I'd question whether these should even be separate OR conditions — a failed SMS reminder that's retried out should probably still need the past-date check, otherwise you're deleting reminders that haven't even reached their scheduled time yet.
+
+---
+
+### Bug: Application-Level Increment Instead of Atomic
+
+```ts
+data: {
+  retryCount: reminder.retryCount + 1,
+},
+```
+
+This reads the count in JS and writes it back. If this cron handler overlaps with itself (or anything else touches this row), you lose increments. Use Prisma's atomic operation:
+
+```ts
+data: {
+  retryCount: { increment: 1 },
+},
+```
+
+---
+
+### Design: Duplicated Retry Logic
+
+The retry increment appears in two places — the `else` branch (no SID returned) and the `catch` block. Same exact code, same exact shape. Extract it:
+
+```ts
+async function incrementRetryCount(reminderId: number) {
+  await prisma.workflowReminder.update({
+    where: { id: reminderId },
+    data: { retryCount: { increment: 1 } },
+  });
+}
+```
+
+Three lines, called twice. Not over-engineering — just not copy-pasting database calls.
+
+---
+
+### Design: Magic Number for Retry Threshold
+
+`gt: 1` appears with no explanation. Does this mean 2 total attempts? 1 retry after the initial? Why not 3? A named constant makes the intent clear and ensures the delete condition and any future "should we retry?" guard stay in sync:
+
+```ts
+const MAX_SMS_RETRY_ATTEMPTS = 2;
+```
+
+---
+
+### Smell: Overly Broad Catch Drives Retry Count
+
+The `catch` block wraps everything from message content construction to the actual SMS send call. An error in `getSenderId()`, template compilation, or any of the attendee lookups will increment `retryCount` — even though those failures have nothing to do with SMS delivery and retrying won't help. The retry increment should be scoped closer to the actual send operation.
+
+---
+
+### Minor: Catch-Block DB Call Can Throw Silently
+
+If the `prisma.workflowReminder.update` in the `catch` block fails (connection issue, row deleted by the cleanup above racing this), you get an unhandled rejection. Wrap it or at least `.catch()` it.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix:**
+1. Scope the delete OR branch — this is a data loss bug
+2. Use atomic `{ increment: 1 }` instead of read-then-write
+
+**Should fix:**
+3. Extract duplicated retry increment into a helper
+4. Name the magic retry threshold constant
+5. Narrow the catch scope so non-send errors don't bump retry count
+
+**Nitpick:**
+6. Guard the catch-block DB update against its own failure

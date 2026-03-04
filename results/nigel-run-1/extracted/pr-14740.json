@@ -1,0 +1,16 @@
+{
+  "issues": [
+    "Authorization logic in addGuests.handler.ts:51-52 uses && instead of ||, requiring users to be both admin AND owner. This means team admins who aren't also owners are silently denied access.",
+    "Passing 0 as a fallback teamId when there's no team causes a query for a non-existent team instead of short-circuiting the authorization check.",
+    "Duplicate Zod schema: AddGuestsDialog.tsx:29-33 defines a ZAddGuestsInputSchema that already exists in addGuests.schema.ts. The client-side version adds a uniqueness refinement the server lacks, and the server version wraps it in an object the client doesn't. There's no single source of truth for validation.",
+    "Guest attendees are assigned the organizer's timezone and locale in addGuests.handler.ts:87-92, so a guest in a different timezone receives calendar invites with incorrect time information.",
+    "Redundant database query: the initial booking query at addGuests.handler.ts:24-45 already includes the user with credentials, but a separate organizer query at lines 57-66 fetches a subset of the same user fields, causing an unnecessary database round-trip.",
+    "Silent email failure in addGuests.handler.ts:166-168: the catch block discards the actual error object and only logs a generic string via console.log. The user gets a success response, guests are never notified, and there's no debugging information.",
+    "BLACKLISTED_GUEST_EMAILS env var is parsed on every request with no caching or validation. Guest emails aren't lowercased before comparison, so mixed-case emails like User@Example.com bypass the blacklist.",
+    "The MultiEmail component may already exist in the codebase (packages/ui/form/MultiEmail.tsx). The lazy loading wrapper comment suggests it was copied from somewhere rather than reusing an existing multi-email input component.",
+    "No shared event-building logic: the ~50 line CalendarEvent construction block in addGuests.handler.ts:103-149 is hand-assembled with the same pattern as editLocation.handler, and will drift between handlers over time.",
+    "multiEmailValue is initialized as [\"\"] rather than [] in AddGuestsDialog.tsx:35, creating a phantom empty string in the array and requiring a workaround length === 0 check in handleAdd.",
+    "Inconsistent naming: add_members is used as the action id but additional_guests as the label in BookingListItem.tsx:193-199.",
+    "The isInvalidEmail state in AddGuestsDialog is set to true but never cleared on subsequent valid input, so the error persists until the user closes and reopens the dialog."
+  ]
+}

@@ -1,0 +1,154 @@
+## This needs serious work.
+
+The intent is sound — centralizing reminder cancellation logic and adding a soft-delete pattern for email reminders. But the execution has several real bugs, an inconsistent deletion strategy that'll confuse every future developer, and a duplicated pattern copy-pasted 8 times that's begging for extraction.
+
+---
+
+### Critical Bugs
+
+**1. `forEach` with async callbacks — promises silently dropped**
+
+This is the most dangerous issue. Multiple call sites use `forEach` with async delete functions, meaning those promises are never awaited and failures are silently swallowed.
+
+`packages/trpc/server/routers/viewer/workflows.tsx` ~line 575:
+```ts
+remindersToUpdate.forEach(async (reminder) => {
+  if (reminder.method === WorkflowMethods.EMAIL) {
+    deleteScheduledEmailReminder(reminder.id, reminder.referenceId);
+  } else if (reminder.method === WorkflowMethods.SMS) {
+    deleteScheduledSMSReminder(reminder.id, reminder.referenceId);
+  }
+});
+```
+
+`forEach` doesn't await async callbacks. These are fire-and-forget. If any of these fail, you'll never know. Same pattern in `handleCancelBooking.ts` and `bookings.tsx`. Use `Promise.all` with `.map()`, or at minimum collect the promises.
+
+**2. `handleNewBooking.ts` — the try/catch wraps a `forEach` of async calls**
+
+```ts
+try {
+  originalRescheduledBooking.workflowReminders.forEach((reminder) => {
+    if (reminder.method === WorkflowMethods.EMAIL) {
+      deleteScheduledEmailReminder(reminder.id, reminder.referenceId, true);
+    }
+    // ...
+  });
+} catch (error) {
+  log.error("Error while canceling scheduled workflow reminders", error);
+}
+```
+
+This try/catch catches *nothing*. The `forEach` returns immediately, the async delete functions return promises that are never awaited, and any rejections will be unhandled promise rejections — not caught by this block. This is bug-disguised-as-error-handling.
+
+---
+
+### Design Issues
+
+**3. Duplicated cancellation pattern — extract this already**
+
+This exact block appears **8 times** across 5 files:
+
+```ts
+if (reminder.method === WorkflowMethods.EMAIL) {
+  deleteScheduledEmailReminder(reminder.id, reminder.referenceId);
+} else if (reminder.method === WorkflowMethods.SMS) {
+  deleteScheduledSMSReminder(reminder.id, reminder.referenceId);
+}
+```
+
+This is a textbook case for a single function like `cancelWorkflowReminder(reminder, options?)` in `reminderScheduler.ts` (which already exports `scheduleWorkflowReminders`). Every time someone adds a new `WorkflowMethod`, they'll need to update 8 locations. They'll miss one. You'll have a bug.
+
+**4. Asymmetric deletion strategies between EMAIL and SMS**
+
+- **Email**: soft-deletes by marking `cancelled: true`, defers actual cancellation to a cron job — unless `immediateDelete` is true, then cancels via SendGrid but *doesn't* delete the DB record — unless `referenceId` is null, then hard-deletes the DB record immediately.
+- **SMS**: always hard-deletes from DB immediately + cancels via Twilio.
+
+Why? There's no comment explaining why these need different strategies. If the soft-delete pattern exists to handle SendGrid's scheduling lag, shouldn't SMS have the same concern with Twilio? This asymmetry will confuse the next developer and likely lead to orphaned records.
+
+**5. `deleteScheduledEmailReminder` is doing three unrelated things**
+
+```ts
+export const deleteScheduledEmailReminder = async (
+  reminderId: number,
+  referenceId: string | null,
+  immediateDelete?: boolean
+) => {
+```
+
+This function has three code paths based on its parameters:
+- `referenceId === null` → delete DB record
+- `immediateDelete === true` → cancel via SendGrid API (but *not* delete DB record)
+- default → mark `cancelled: true` in DB
+
+A boolean parameter controlling behavior is already a smell. Three mutually exclusive behaviors in one function is three functions wearing a trench coat. Split them, or at least make the `immediateDelete` path also clean up the DB record, because right now it doesn't — it relies on the cron job to find `cancelled` records, but it never *sets* `cancelled`.
+
+Wait — re-reading: when `immediateDelete` is true, the function cancels via SendGrid and *returns early* without updating or deleting the DB record. So who cleans that up? The cascade delete on `WorkflowStep`? That's an implicit dependency that's nowhere documented.
+
+**6. Nullable boolean on the schema**
+
+```prisma
+cancelled Boolean?
+```
+
+A nullable boolean is a tri-state: `true`, `false`, `null`. You almost certainly want `@default(false)`. As-is, your cron query `where: { cancelled: true }` will miss records where `cancelled` is `null` vs `false`, but the semantics of those two states are identical. Use `Boolean @default(false)`.
+
+---
+
+### Lesser Issues
+
+**7. Type imports changed to value imports in `handleNewBooking.ts`**
+
+```ts
+import {
+  App,
+  Credential,
+  EventTypeCustomInput,
+  Prisma,
+  // ...
+} from "@prisma/client";
+```
+
+`App`, `Credential`, `EventTypeCustomInput` were previously imported with `import type`. Importing them as values pulls more into the bundle. Keep `type` imports for things only used as types.
+
+**8. The cron handler processes cancellations sequentially**
+
+```ts
+for (const reminder of remindersToCancel) {
+  await client.request({ ... });
+  // ...
+}
+```
+
+Sequential API calls in a loop. If there are 100 cancelled reminders, this runs 100 sequential HTTP requests. Batch these or at least run them with controlled concurrency.
+
+**9. Inconsistent error logging**
+
+Some places use `log.error()`, others use `console.log()`. The manager functions use `console.log` for errors — not even `console.error`. Pick one approach.
+
+**10. `isSenderIdNeeded` silently dropped from UI**
+
+The component previously checked `(isPhoneNumberNeeded || isSenderIdNeeded)` for the outer wrapper. Now it only checks `isPhoneNumberNeeded`. If `isSenderIdNeeded` was ever true without `isPhoneNumberNeeded`, that UI section is now invisible. No explanation in the PR for why this is safe.
+
+**11. Indentation churn at the bottom of `workflows.tsx`**
+
+~60 lines of re-indented commented-out code. This is noise in the diff that makes the actual changes harder to review.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix:**
+1. Fix the `forEach`-with-async pattern everywhere — use `Promise.all(reminders.map(...))` and actually await the results
+2. Fix the try/catch in `handleNewBooking.ts` that catches nothing
+3. Make `immediateDelete` path in `deleteScheduledEmailReminder` also handle DB cleanup — right now it silently orphans records
+
+**Should fix:**
+4. Extract the repeated cancellation if/else into a single `cancelWorkflowReminder(reminder, options?)` helper
+5. Change `cancelled Boolean?` to `cancelled Boolean @default(false)` in the schema
+6. Document *why* email and SMS have different cancellation strategies, or unify them
+7. Keep type-only imports as `import type`
+
+**Nits:**
+8. Use `console.error` or a proper logger consistently for error paths
+9. Batch the sequential SendGrid API calls in the cron handler
+10. Clean up the indentation-only changes in the diff

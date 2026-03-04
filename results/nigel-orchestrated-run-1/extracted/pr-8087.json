@@ -1,0 +1,12 @@
+{
+  "issues": [
+    "In three files (vital/lib/reschedule.ts, wipemycalother/lib/reschedule.ts, and trpc/server/routers/viewer/bookings.tsx), `Array.forEach` is used with an async callback. Since forEach does not await the returned promises, these async operations become fire-and-forget, meaning errors are silently swallowed and the surrounding try/catch blocks never catch failures.",
+    "The async forEach pattern in the reschedule and bookings files means calendar event deletions and video meeting cleanups can fail silently in production, causing silent data loss.",
+    "In handleCancelBooking.ts around line 458, there is still a `forEach(async ...)` pattern even though the same file correctly uses `for...of` at line 476, showing the fix was applied inconsistently within the same file.",
+    "In packages/core/CalendarManager.ts, `getCalendarCredentials` calls `getCalendar(credential)` which is now async and returns a Promise, but the call site was not updated to await it. The `calendar` field silently becomes a Promise instead of a Calendar object, and the type system does not reflect this.",
+    "The downstream consumer `getConnectedCalendars` works around the `getCalendarCredentials` issue by awaiting `item.calendar`, but this only works by accident. Any future consumer of `getCalendarCredentials` will receive a Promise where they expect a Calendar, and TypeScript won't warn them because the types are incorrect.",
+    "The appStore in packages/app-store/index.ts uses bare `import()` calls that all fire immediately when the module loads, eagerly kicking off all 29 imports in parallel. This is not true lazy loading \u2014 it pays the full cost upfront, just non-blocking. True lazy loading would require thunks like `() => import(...)`.",
+    "None of the `await appStore[...]` call sites handle import failures. Unlike static imports which fail at build time, dynamic imports can fail at runtime (syntax errors, missing dependencies, network issues in edge runtime), making this a reliability regression with no error handling.",
+    "The iteration patterns are inconsistent across the codebase \u2014 some files use the correct `for...of` pattern while four other locations use the broken `forEach(async ...)` pattern, indicating the fix was not applied uniformly."
+  ]
+}

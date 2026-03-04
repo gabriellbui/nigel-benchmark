@@ -1,0 +1,15 @@
+{
+  "issues": [
+    "Race condition (TOCTOU) on backup code consumption during login: two concurrent requests with the same backup code can both read, validate, and write back the encrypted blob, breaking the single-use guarantee. Needs an atomic operation like a database transaction with row locking or optimistic concurrency control.",
+    "Backup codes are stored using reversible symmetric encryption instead of being hashed like passwords. If CALENDSO_ENCRYPTION_KEY is compromised, every user's backup codes are exposed in plaintext, effectively bypassing 2FA.",
+    "Backup code validation is case-sensitive on hex strings. Users typing uppercase hex (e.g. A3F2B instead of a3f2b) will fail validation, which is user-hostile for an emergency recovery flow. A .toLowerCase() call is needed.",
+    "No rate limiting on backup code attempts. Neither the login nor disable endpoint has rate limiting specific to backup code attempts, reducing the effective search space given multiple valid codes.",
+    "Backup code validation logic is duplicated between next-auth-options.ts (login) and totp/disable.ts with the same decrypt, indexOf, and error handling pattern. This should be extracted into a shared utility to prevent divergence.",
+    "Copy-paste error in console.error message in the disable endpoint says 'backup code login' instead of referencing the disable flow, proving the duplicated code has already produced a bug.",
+    "Backup codes are generated during the setup step before the user has enabled 2FA. If they abandon setup after seeing the QR code, backup codes sit in the database for a user with twoFactorEnabled: false. Codes should be generated at the enable step after TOTP verification succeeds.",
+    "The SetupStep enum orders DisplayBackupCodes at position 1 (before DisplayQrCode and EnterTotpCode), but the actual user flow is ConfirmPassword \u2192 DisplayQrCode \u2192 EnterTotpCode \u2192 DisplayBackupCodes. The enum ordering is misleading.",
+    "BackupCode.tsx exports a function named TwoFactor instead of BackupCode, conflicting with the existing TwoFactor.tsx which also exports a function named TwoFactor. Two files exporting the same function name with completely different purposes.",
+    "Nested ternary in login.tsx with no parentheses ({twoFactorRequired ? !twoFactorLostAccess ? <TwoFactor /> : <BackupCode /> : null}) is difficult to read and should be refactored.",
+    "No tests exist for the security-critical paths: logging in with a backup code, disabling 2FA with a backup code, using a consumed code, or using an invalid code. Only the setup happy path (download/copy/close buttons) is tested."
+  ]
+}

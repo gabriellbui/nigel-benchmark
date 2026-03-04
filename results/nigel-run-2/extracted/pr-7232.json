@@ -1,0 +1,16 @@
+{
+  "issues": [
+    "Multiple call sites use `forEach` with async delete callbacks, meaning promises are never awaited and failures are silently swallowed. This occurs in `workflows.tsx`, `handleCancelBooking.ts`, and `bookings.tsx`. Should use `Promise.all` with `.map()` to properly await all deletions.",
+    "In `handleNewBooking.ts`, a try/catch wraps a `forEach` of async calls, but since `forEach` returns immediately and the async promises are never awaited, the catch block catches nothing. Any rejections become unhandled promise rejections.",
+    "The same cancellation if/else block (checking `reminder.method` for EMAIL vs SMS and calling the corresponding delete function) is duplicated 8 times across 5 files. This should be extracted into a single helper like `cancelWorkflowReminder(reminder, options?)`.",
+    "Email and SMS reminders use asymmetric deletion strategies \u2014 email uses soft-delete with a cron job while SMS always hard-deletes immediately \u2014 with no documented justification for why they differ. This inconsistency will confuse future developers and may lead to orphaned records.",
+    "`deleteScheduledEmailReminder` has three mutually exclusive code paths controlled by parameter combinations (`referenceId === null`, `immediateDelete === true`, default), which is effectively three functions in one. A boolean parameter controlling behavior is a code smell.",
+    "When `immediateDelete` is true, `deleteScheduledEmailReminder` cancels via SendGrid API but returns early without updating or deleting the DB record and without setting `cancelled` to true. This silently orphans records with no documented cleanup path.",
+    "The `cancelled` field in the Prisma schema is defined as `Boolean?` (nullable), creating a tri-state of `true`, `false`, and `null`. Since `null` and `false` are semantically identical here, it should be `Boolean @default(false)` to avoid subtle query bugs.",
+    "In `handleNewBooking.ts`, type-only imports (`App`, `Credential`, `EventTypeCustomInput`) from `@prisma/client` were changed from `import type` to value imports, which pulls more code into the bundle unnecessarily.",
+    "The cron handler processes cancelled reminder deletions sequentially in a for loop, making one HTTP request at a time. With many cancelled reminders this will be very slow; these should be batched or run with controlled concurrency.",
+    "Error logging is inconsistent across the codebase \u2014 some places use `log.error()`, others use `console.log()` for errors instead of even `console.error`. A single consistent approach should be used.",
+    "The `isSenderIdNeeded` check was silently dropped from the UI component's conditional rendering. Previously the outer wrapper checked `(isPhoneNumberNeeded || isSenderIdNeeded)`, now it only checks `isPhoneNumberNeeded`, potentially hiding UI when `isSenderIdNeeded` is true alone.",
+    "Approximately 60 lines of indentation-only changes to commented-out code at the bottom of `workflows.tsx` create noise in the diff that makes actual changes harder to review."
+  ]
+}

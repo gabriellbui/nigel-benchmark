@@ -1,0 +1,102 @@
+## Code Review: SMS Workflow Reminder Retry Count Tracking (PR #14943)
+
+### Verdict: This needs work. Quite a bit of it.
+
+The goal is reasonable — add retry tracking so SMS reminders don't get hammered infinitely when Twilio is having a bad day. But the execution has several problems ranging from "confusing" to "will delete data it shouldn't."
+
+---
+
+### Critical Issues
+
+**1. The OR clause in the delete query is a data loss bug**
+
+```typescript
+await prisma.workflowReminder.deleteMany({
+  where: {
+    OR: [
+      { method: WorkflowMethods.SMS, scheduledDate: { lte: dayjs().toISOString() } },
+      { retryCount: { gt: 1 } },  // ← NO method filter
+    ],
+  },
+});
+```
+
+The second OR branch has **no method filter**. It will delete **any** `WorkflowReminder` with `retryCount > 1` — SMS, email, whatever else gets added in the future. Right now email reminders don't use retry logic so `retryCount` sits at 0 and this won't bite you *today*. But the moment someone adds retry tracking to email (following this PR's precedent), this query starts nuking email reminders too.
+
+Even arguing "only SMS uses retryCount right now" — that's coding by coincidence, not by design. `method: WorkflowMethods.SMS` belongs on both branches.
+
+Beyond the missing filter, the semantics are wrong. A reminder retried twice but not yet past its scheduled date gets deleted before it ever had a real chance.
+
+**2. Race condition on retryCount increment**
+
+```typescript
+data: {
+  retryCount: reminder.retryCount + 1,
+}
+```
+
+Classic read-then-write race. `reminder.retryCount` was fetched at handler start. If the cron overlaps or fires twice, two executions read `retryCount: 0`, both write `retryCount: 1`, and you lose an increment. Use Prisma's atomic increment:
+
+```typescript
+data: {
+  retryCount: { increment: 1 },
+}
+```
+
+**3. The catch-block DB update can itself throw**
+
+```typescript
+} catch (error) {
+  await prisma.workflowReminder.update({
+    where: { id: reminder.id },
+    data: { retryCount: reminder.retryCount + 1 },
+  });
+  console.log(`Error scheduling SMS with error ${error}`);
+}
+```
+
+If the DB is down or the reminder was already deleted by a concurrent run, this `update` throws an unhandled exception *inside a catch block* — crashing the handler and preventing processing of remaining reminders in the batch.
+
+---
+
+### Design Issues
+
+**4. Magic number `1` in `retryCount > 1`** — Why 2 attempts? Product decision? Twilio best practice? Gut feeling? Zero documentation, zero constants. Should be a named constant like `MAX_SMS_RETRY_ATTEMPTS` referenced in both the delete query and increment logic.
+
+**5. Duplicate retry increment logic** — The identical 7-line `prisma.workflowReminder.update` block appears twice (else branch + catch block). Extract into a helper. When someone changes retry logic, they'll need to find both.
+
+**6. No observability** — The `console.log` doesn't mention `retryCount`. When reminders start disappearing after 2 failures and someone asks "why," good luck tracing it.
+
+**7. Inconsistency with email pattern** — Email uses soft-delete (`cancelled: true`), SMS uses hard-delete. This PR adds retry tracking only to SMS with hard-delete as the max-retries behavior. No comment acknowledging the divergence.
+
+---
+
+### The Migration
+
+```sql
+ALTER TABLE "WorkflowReminder" ADD COLUMN "retryCount" INTEGER NOT NULL DEFAULT 0;
+```
+
+`NOT NULL DEFAULT 0` is correct for a counter. Schema change matches. No complaints here.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix (blocking):**
+1. Add `method: WorkflowMethods.SMS` to the second OR branch in the delete query — unbounded blast radius without it
+2. Replace `reminder.retryCount + 1` with `{ increment: 1 }` in both update calls — race condition
+3. Wrap the catch-block DB update in its own try-catch — one failed increment shouldn't crash the batch
+
+**Should fix:**
+4. Extract magic number into a named constant like `MAX_SMS_RETRY_ATTEMPTS`
+5. Deduplicate the retry increment logic into a helper
+6. Add retry count to error logs for debuggability
+
+**Nitpick:**
+7. Add a comment at the delete query explaining retry-based cleanup rationale
+8. Consider separating "delete expired" and "delete max-retried" into distinct cleanup steps
+
+---
+
+This PR introduces a genuinely useful concept but cuts enough corners to cause real problems in production. The delete query scoping issue alone is worth blocking the merge.

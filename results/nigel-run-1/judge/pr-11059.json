@@ -1,0 +1,40 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.98,
+      "evidence": "If there's no refresh token, it injects the literal string \"refresh_token\" as the token value. This is a magic placeholder that will silently break on the next refresh cycle when the app tries to use this garbage value against the OAuth provider.",
+      "reasoning": "The review explicitly identifies the same defect: the code sets refresh_token to the literal string 'refresh_token' when missing, which will break subsequent token refresh attempts against the OAuth provider."
+    },
+    {
+      "bug_idx": 1,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "`z.string().toString()` evaluates to `\"ZodString\"` \u2014 a literal string key. This schema defines a property literally named `\"ZodString\"` of type `z.number()`... This does **not** create a dynamic catch-all schema. It validates nothing useful beyond `access_token`.",
+      "reasoning": "The review explicitly identifies the same defect: computed property keys using Zod methods as keys produce literal string keys like 'ZodString' rather than dynamic schemas, resulting in a broken/nonsensical schema."
+    },
+    {
+      "bug_idx": 2,
+      "match": false,
+      "confidence": 0.9,
+      "evidence": "",
+      "reasoning": "The review identifies issues with parseRefreshTokenResponse's Zod schema (issue #1) and sentinel value injection (issue #2), and notes the safeParse result structure in the Office365 discussion (issue #9), but never identifies the specific defect that the safeParse wrapper object ({success, data, error}) is being persisted as the credential key instead of extracting and storing the actual parsed .data payload."
+    },
+    {
+      "bug_idx": 3,
+      "match": false,
+      "confidence": 0.72,
+      "evidence": "the abstraction doesn't handle the response normalization \u2014 callers still process the response differently. This is the worst of both worlds: it adds indirection without removing complexity.",
+      "reasoning": "Point 5 notes that response normalization isn't handled and callers process responses differently, which touches the same area, but it frames this as a design/readability complaint ('leaky abstraction') rather than identifying the specific defect: that the sync-enabled path returns a raw fetch Response while callers like GoogleCalendarService expect res.data and HubspotCalendarService expects a HubspotToken, causing runtime errors."
+    },
+    {
+      "bug_idx": 4,
+      "match": false,
+      "confidence": 0.8,
+      "evidence": "",
+      "reasoning": "Issue #5 discusses refreshOAuthTokens as a leaky abstraction where callers process responses differently, but it frames this as a design/complexity concern, not the specific runtime bug that fetch Response lacks .data causing token.access_token to throw when the sync endpoint path is used."
+    }
+  ],
+  "bugs": 5
+}

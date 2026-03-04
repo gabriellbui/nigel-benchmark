@@ -1,0 +1,40 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.99,
+      "evidence": "You're **inventing** a refresh token when one isn't present, setting it to the literal string `\"refresh_token\"`. This is a time bomb. When the system later tries to use this fake token to refresh credentials, it will fail with an opaque error that nobody will trace back to this line.",
+      "reasoning": "The review explicitly identifies that parseRefreshTokenResponse sets refresh_token to the hardcoded string 'refresh_token' when missing, which will cause subsequent refresh failures \u2014 exactly matching the golden bug."
+    },
+    {
+      "bug_idx": 1,
+      "match": true,
+      "confidence": 0.99,
+      "evidence": "This is not how Zod works. `z.string().toString()` evaluates to a static string representation of the Zod type (something like `\"ZodString\"`), not a dynamic key matcher. You're defining an object with literal computed property names that are Zod's internal string representations.",
+      "reasoning": "The review explicitly identifies that computed property keys like [z.string().toString()] are invalid in Zod object schemas and will not behave as intended, which is the exact same defect described in the golden bug."
+    },
+    {
+      "bug_idx": 2,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "In `GoogleCalendarService`, the return value is used directly as `key` in a Prisma update \u2014 meaning you're storing the Zod SafeParse wrapper object (`{ success, data, error }`) as the credential key, not the actual parsed data... The Google Calendar usage is a data corruption bug.",
+      "reasoning": "The review explicitly identifies that parseRefreshTokenResponse returns the SafeParse wrapper ({ success, data, error }) and that persisting it directly as the credential key stores the wrapper instead of the parsed token data, which is the exact same defect described in the golden bug."
+    },
+    {
+      "bug_idx": 3,
+      "match": true,
+      "confidence": 0.95,
+      "evidence": "when using the sync endpoint, it returns a raw `Response` object from `fetch()`. When using the passed function, it returns whatever that function returns (which could be a Google auth response, an Axios response, a Hubspot token, etc.). Callers that do `await response.json()` or access `.data` will blow up depending on which branch executed.",
+      "reasoning": "The review explicitly identifies the same defect: the sync-enabled path returns a raw fetch Response while callers like Google Calendar (accessing .data) and Hubspot expect integration-specific token objects, causing runtime errors."
+    },
+    {
+      "bug_idx": 4,
+      "match": true,
+      "confidence": 0.95,
+      "evidence": "when using the sync endpoint, it returns a raw `Response` object from `fetch()`. When using the passed function, it returns whatever that function returns... Callers that do `await response.json()` or access `.data` will blow up depending on which branch executed.",
+      "reasoning": "The review identifies the same root cause: refreshOAuthTokens returns a fetch Response from the sync endpoint path, and callers accessing .data will fail because Response has no .data property."
+    }
+  ],
+  "bugs": 5
+}

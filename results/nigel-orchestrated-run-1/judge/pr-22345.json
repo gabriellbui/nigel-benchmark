@@ -1,0 +1,19 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "`getAuthorizationConditions()` always returns `Prisma.Sql` (never null/falsy). The branches handling falsy `authConditions` are dead code.",
+      "reasoning": "Review item #7 identifies the exact same root cause: getAuthorizationConditions() always returns a non-null Prisma.Sql, making the branches that handle falsy authConditions unreachable dead code, which matches the golden bug's description of unreachable else if and else branches in getBaseConditions()."
+    },
+    {
+      "bug_idx": 1,
+      "match": false,
+      "confidence": 0.8,
+      "evidence": "Meanwhile `userIdsFromOrg` gets an explicit length check, but `teamIds` does not. This asymmetry suggests the author didn't think through the empty case systematically.",
+      "reasoning": "The review notices the asymmetry between the userIdsFromOrg guard and teamIds handling, but diagnoses the problem in the opposite direction \u2014 it wants to ADD a guard to teamIds, whereas the golden bug identifies that the existing guard on userIdsFromOrg is itself the defect (excluding org-level members when there are no child teams)."
+    }
+  ],
+  "bugs": 2
+}

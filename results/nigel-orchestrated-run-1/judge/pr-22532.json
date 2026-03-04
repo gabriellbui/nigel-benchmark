@@ -1,0 +1,19 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.99,
+      "evidence": "Prisma's `@updatedAt` decorator only fires when Prisma detects actual data changes in an `update` call. Passing an empty object `{}` as the data argument means Prisma has nothing to update, and `@updatedAt` will not trigger.",
+      "reasoning": "The review explicitly identifies that the empty data object in updateManyByCredentialId prevents the updatedAt timestamp from being updated, which is the exact same root cause described in the golden bug."
+    },
+    {
+      "bug_idx": 1,
+      "match": true,
+      "confidence": 0.95,
+      "evidence": "It uses macOS-specific `sed -i ''` syntax (will fail on Linux)",
+      "reasoning": "The review explicitly identifies the same defect: macOS-specific sed -i '' syntax that will fail on Linux systems."
+    }
+  ],
+  "bugs": 2
+}

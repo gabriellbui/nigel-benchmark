@@ -1,0 +1,40 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "guest emails aren't lowercased before comparison, so User@Example.com bypasses the blacklist",
+      "reasoning": "The review explicitly identifies that guest emails are not lowercased before comparison against the blacklist, which is the exact case sensitivity bypass defect described in the golden bug."
+    },
+    {
+      "bug_idx": 1,
+      "match": true,
+      "confidence": 0.99,
+      "evidence": "This uses `&&` \u2014 meaning someone must be **both** admin AND owner. That's almost certainly wrong; you want `||`.",
+      "reasoning": "The review explicitly identifies the same defect: the AND (&&) operator should be OR (||) for the team admin/owner permission check."
+    },
+    {
+      "bug_idx": 2,
+      "match": false,
+      "confidence": 0.95,
+      "evidence": "",
+      "reasoning": "The review discusses silent email failure (error swallowing) and guest timezone issues, but never identifies the specific defect that the email sender is called with the original/full guest list instead of only the newly added guests, causing existing attendees to incorrectly receive new-guest notifications."
+    },
+    {
+      "bug_idx": 4,
+      "match": true,
+      "confidence": 0.95,
+      "evidence": "`multiEmailValue` initialized as `[\"\"]` rather than `[]` \u2014 `AddGuestsDialog.tsx:35`. This means there's always a phantom empty string in the array, which is why you need the `length === 0` check in `handleAdd`. Initialize to `[]` and show the \"add email\" button when empty.",
+      "reasoning": "The review identifies the exact same defect: initializing with [\"\"] instead of [] causes issues, and recommends starting with an empty array and handling the empty state differently."
+    },
+    {
+      "bug_idx": 3,
+      "match": true,
+      "confidence": 0.65,
+      "evidence": "The client-side one adds a uniqueness refinement that the server schema doesn't have... If you want uniqueness checking, add it to the shared schema and import it.",
+      "reasoning": "The review identifies that the server schema lacks the uniqueness refinement present on the client side, which is the root cause enabling duplicate emails to pass through to createMany, but it frames it as a DRY/schema consistency issue rather than explicitly calling out the duplicate row insertion consequence."
+    }
+  ],
+  "bugs": 5
+}

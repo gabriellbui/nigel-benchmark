@@ -1,0 +1,14 @@
+{
+  "issues": [
+    "In GoogleCalendarService's updateEvent and deleteEvent, the fallback branch searches for a calendar matching externalCalendarId, but externalCalendarId is guaranteed to be falsy in that branch, so the .find() is dead code and will always return undefined. In deleteEvent this causes incorrect fallback to the default calendar, potentially deleting from the wrong calendar.",
+    "In EventManager.ts line 117, destructuring mainHostDestinationCalendar from evt.destinationCalendar without a null/undefined guard means accessing .integration will throw a runtime error if destinationCalendar is null or an empty array. The old code used optional chaining which was removed without adding a replacement guard.",
+    "The createEvent signature in Calendar.d.ts now requires a credentialId parameter, but office365calendar and larkcalendar still use the old signature without credentialId. Either all calendar implementations need updating or the parameter should be optional in the interface.",
+    "The same credential-fetching-from-DB block is copy-pasted three times across createAllCalendarEvents, updateAllCalendarEvents, and handleCancelBooking. This should be extracted into a shared helper to avoid divergence and maintenance burden.",
+    "The same destinationCalendar array-wrapping ternary pattern appears in at least 8 different files. This migration concern should be a single utility function rather than independently reimplemented in every consumer.",
+    "The destructuring pattern const [mainHostDestinationCalendar] = event.destinationCalendar ?? [] is copy-pasted across 8 places in different calendar services. If the semantics of selecting the main host calendar ever change, all 8 files need updating.",
+    "The loadUsers rewrite in handleNewBooking.ts is unrelated to the destinationCalendar change. It replaces a concise ternary with verbose try/catch that loses original error detail, adds redundant validation, and removes the organization select that was previously present.",
+    "In organization create.handler.ts, the change from !IS_TEAM_BILLING_ENABLED to IS_TEAM_BILLING_ENABLED inverts the logic for when slug is spread. The original spreads slug when billing is disabled; the replacement spreads it when billing is enabled. This is either an intentional logic inversion that needs its own PR or a bug.",
+    "The isTeamEventType check was changed to use string literals instead of the SchedulingType enum. If someone renames an enum value, TypeScript would catch it with the original code but the string literal version would silently break.",
+    "Unrelated changes like the orginalBookingDuration typo fix and Prisma/Booking import reformatting are mixed into a PR that should be focused on the destinationCalendar array migration. These should be separate commits or PRs."
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "issues": [
+    "Authorization bypass in deleteCache handler: the handler only checks direct ownership via credential.userId === user.id, but does not explicitly handle delegation credentials (delegationCredentialId), relying on accidental null-return behavior rather than intentional authorization logic.",
+    "The updateManyByCredentialId call passes an empty data object to trigger Prisma's implicit @updatedAt timestamp behavior, which is a fragile side-effect hack that silently breaks if @updatedAt is removed from the schema. Should explicitly pass { updatedAt: new Date() }.",
+    "The CalendarCache migration uses DEFAULT NOW() which only provides a SQL-level default, while @updatedAt is a Prisma-level concern. Any raw SQL inserts will get a timestamp at insert time but never receive automatic updates, creating a footgun.",
+    "cacheUpdatedAt is sourced from CalendarCache.updatedAt in the connectedCalendars handler, while SelectedCalendar.updatedAt is touched in fetchAndSaveAvailability \u2014 these are two different timestamps on two different tables measuring different things. If SelectedCalendar.updatedAt isn't displayed in the UI, it shouldn't be fetched.",
+    "CredentialActionsDropdown is a 157-line component managing three pieces of state, two mutations, and conditional rendering for both cache management and disconnect functionality. These are independent concerns that should be composed separately rather than combined in one monolithic dropdown.",
+    "Date formatting uses hardcoded \"en-US\" locale in a component that already imports useLocale. The locale should come from the user's settings, which is a user-facing bug for non-English users.",
+    "The test script scripts/test-gcal-webhooks.sh is a tunneling helper for local development unrelated to cache status and actions, and should not be included in this feature PR.",
+    "The dev:cron change from ts-node to npx tsx is an unrelated drive-by fix that should not be in this PR.",
+    "Hardcoded CSS colors (text-gray-900, text-gray-500, etc.) are used in the dropdown instead of design token classes (text-default, text-subtle) that the rest of the codebase likely uses, bypassing the theme system.",
+    "The deleteCache tRPC route inlines its input validation schema directly in the router, while every other route in the calendars router uses a separate .schema.ts file, making it inconsistent with the established pattern.",
+    "The || null coercion on delegationCredentialId suggests a type mismatch upstream that is being patched over rather than properly investigated and fixed at the source."
+  ]
+}

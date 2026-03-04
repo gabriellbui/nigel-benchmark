@@ -1,0 +1,21 @@
+{
+  "issues": [
+    "Broken authorization logic: `&&` should be `||` in `addGuests.handler.ts:50-51`. The check requires the user to be both admin AND owner, but the intent (and variable name `isTeamAdminOrOwner`) is to allow either. A team admin who isn't the owner gets incorrectly denied access.",
+    "The fallback `teamId ?? 0` in `addGuests.handler.ts:50-51` is dangerous. When `booking.eventType?.teamId` is null (personal bookings), it passes `0` to `isTeamAdmin`/`isTeamOwner`, resulting in a meaningless query against a nonexistent team. It should short-circuit when there's no team context.",
+    "No validation that the booking is in the future in `addGuests.handler.ts`. Guests can be added to past bookings, which will still trigger calendar updates and send emails.",
+    "No limit on guest count in `addGuests.schema.ts`. The schema accepts an unbounded array of emails, allowing someone to submit thousands of addresses and trigger mass attendee record creation and email sends.",
+    "Duplicate validation schema between `addGuests.schema.ts` and `AddGuestsDialog.tsx:29-33`. The server and client define different Zod schemas with different validations (e.g., the uniqueness refinement only exists on the client). There should be a single source of truth, and the uniqueness check should also live on the server.",
+    "Zod schema `ZAddGuestsInputSchema` is instantiated inside the component function body in `AddGuestsDialog.tsx:29-33`, creating a new Zod schema object on every render. It should be moved outside the component.",
+    "Initial state `[\"\"]` in `AddGuestsDialog.tsx:36` is a code smell. The array always has length >= 1, so the `multiEmailValue.length === 0` check in `handleAdd` will never trigger. The intent of the empty-state check is defeated.",
+    "Redundant organizer query in `addGuests.handler.ts:62-73`. The booking query already includes `user` via `include`, but a second query fetches the organizer by `booking.userId`. `booking.user` is already available.",
+    "Error message template in `AddGuestsDialog.tsx:46` shows raw TRPC error codes (e.g., `BAD_REQUEST: Emails must be unique`) to users, which is poor UX and inconsistent with other dialogs in the codebase.",
+    "The `MultiEmail` component in `packages/ui/form/MultiEmail.tsx` is a brand new 96-line component that may duplicate an existing multi-input pattern (the booking form already supports adding guests). If it must be new, it should follow existing form component patterns (use `forwardRef`, consistent prop naming).",
+    "Using array index as React key (`key={index}`) in the `MultiEmail` component on a list where items can be spliced will cause stale input state when items are reordered or removed.",
+    "The lazy loading wrapper in `MultiEmailLazy.tsx:4` claims the component is 40kb, but `MultiEmail.tsx` is 96 lines with no heavy dependencies beyond already-bundled components. The `as unknown as` double-cast is a red flag, and the lazy wrapper adds complexity for no measurable gain.",
+    "In `addGuests.handler.ts:171`, `console.log(\"Error sending AddGuestsEmails\")` swallows the actual error object. The error itself should be logged.",
+    "In `addGuests.handler.ts:174`, returning `{ message: \"Guests added\" }` as a hardcoded English string from an API endpoint in a localized app is inconsistent with other handlers that likely return structured data.",
+    "Missing blank line before `sendAddGuestsEmails` in `email-manager.ts:523`, inconsistent with the rest of the file which has blank lines between exports.",
+    "The action ID is `\"add_members\"` in `BookingListItem.tsx:195` but the feature is about adding guests, creating a naming inconsistency that will confuse anyone searching the codebase.",
+    "Guest name is set to `\"\"` in `addGuests.handler.ts:100`. These attendees will appear nameless in calendar invites and emails. The email prefix could be used as a fallback."
+  ]
+}

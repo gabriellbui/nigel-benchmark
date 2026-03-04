@@ -1,0 +1,10 @@
+{
+  "issues": [
+    "The delete query's second OR branch (retryCount > 1) has no method filter and no date filter, so it will delete every WorkflowReminder in the table with retryCount > 1 regardless of method or scheduled date, causing unintended data loss for email, WhatsApp, and future reminders.",
+    "The retry count increment uses application-level read-then-write (reminder.retryCount + 1) instead of Prisma's atomic { increment: 1 } operation, which can lose increments if the cron handler overlaps with itself or another process touches the same row.",
+    "The retry increment logic is duplicated in both the else branch (no SID returned) and the catch block with the same exact code, and should be extracted into a shared helper.",
+    "The retry threshold value (gt: 1) is a magic number with no explanation of intent \u2014 it's unclear whether it means 2 total attempts or 1 retry after the initial, and it risks going out of sync with any future retry guard.",
+    "The catch block wraps too broadly, covering message content construction, getSenderId(), template compilation, and attendee lookups in addition to the actual SMS send call. Errors in those non-send operations will incorrectly increment retryCount even though retrying won't help.",
+    "The prisma.workflowReminder.update call inside the catch block can itself throw (e.g., connection issue or row deleted by cleanup racing this), resulting in an unhandled rejection that is not caught or guarded against."
+  ]
+}

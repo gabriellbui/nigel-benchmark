@@ -1,0 +1,177 @@
+*cracks knuckles*
+
+Alright. This is a significant type change — migrating `destinationCalendar` from a single object to an array — to support collective event types with multiple hosts. The intent is reasonable. The execution? Let's talk.
+
+---
+
+## Overall Assessment: This needs work.
+
+The core idea is sound — collective events need per-host calendar routing. But this PR has repeated patterns that smell like it was done in a hurry, logic bugs that will bite you in production, and a concerning amount of copy-pasted credential-fetching code.
+
+---
+
+## Critical Bugs
+
+### 1. Dead code in `updateEvent` and `deleteEvent` — Google Calendar
+
+`packages/app-store/googlecalendar/lib/CalendarService.ts`
+
+```ts
+const selectedCalendar = externalCalendarId
+  ? externalCalendarId
+  : event.destinationCalendar?.find((cal) => cal.externalId === externalCalendarId)?.externalId;
+```
+
+This appears in both `updateEvent` (~line 253) and `deleteEvent` (~line 312). Read this carefully: if `externalCalendarId` is falsy, you enter the else branch and search for a calendar where `cal.externalId === externalCalendarId` — which is falsy. **This will always return `undefined`**. The `.find()` is dead code. It can never match because you only reach it when `externalCalendarId` is falsy.
+
+This is the kind of bug that silently degrades to a fallback ("primary" or `undefined`) and nobody notices until a user reports their events landing in the wrong calendar.
+
+### 2. Potential crash in `EventManager.ts` — unguarded destructure
+
+`packages/core/EventManager.ts:117`
+
+```ts
+const [mainHostDestinationCalendar] = evt.destinationCalendar ?? [];
+if (evt.location === MeetLocationType && mainHostDestinationCalendar.integration !== "google_calendar") {
+```
+
+If `evt.destinationCalendar` is an empty array, `mainHostDestinationCalendar` is `undefined`. Accessing `.integration` on `undefined` throws. The old code at least had optional chaining. This is a regression.
+
+### 3. `requestReschedule.handler.ts` — original code was already buggy, and this PR preserved the bug
+
+```ts
+destinationCalendar: bookingToReschedule?.destinationCalendar
+  ? [bookingToReschedule?.destinationCalendar]
+  : [],
+```
+
+The original was `bookingToReschedule?.destinationCalendar || bookingToReschedule?.destinationCalendar` — the same value on both sides of the `||`. The old code was a copy-paste bug (probably meant to fall back to user's calendar), and this PR just wrapped it in an array without questioning it.
+
+---
+
+## Design Issues
+
+### 4. Copy-pasted credential fetching — screaming for extraction
+
+The "fetch credential from DB if not in memory" pattern appears **three times** with identical Prisma queries and identical object mapping:
+
+- `EventManager.ts:createAllCalendarEvents` (~line 345)
+- `EventManager.ts:updateCalendarEvents` (~line 505)
+- `handleCancelBooking.ts` (~line 430)
+
+All three do:
+```ts
+const credentialFromDB = await prisma.credential.findUnique({
+  include: { app: { select: { slug: true } } },
+  where: { id: credentialId },
+});
+if (credentialFromDB && credentialFromDB.app?.slug) {
+  credential = {
+    appName: credentialFromDB?.app.slug ?? "",
+    id: credentialFromDB.id,
+    type: credentialFromDB.type,
+    // ... same shape every time
+  };
+}
+```
+
+This should be a single helper: `getCredentialById(id: number): Promise<CredentialWithAppName | null>`. Three copies means three places to update when the credential shape changes, three places to forget to add error handling.
+
+### 5. Inconsistent array wrapping scattered everywhere
+
+The pattern `x ? [x] : y ? [y] : []` for converting the old single-object to an array appears in **9+ locations** across handlers, webhooks, cron jobs, and payment flows:
+
+```ts
+destinationCalendar: booking.destinationCalendar
+  ? [booking.destinationCalendar]
+  : user.destinationCalendar
+  ? [user.destinationCalendar]
+  : [],
+```
+
+This is a migration concern leaking into business logic. There should be a utility — `toDestinationCalendarArray(booking, user)` or similar — called at the boundary where DB data meets the `CalendarEvent` type. One function, one place to reason about the fallback logic.
+
+### 6. `createEvent` signature change breaks the interface contract inconsistently
+
+`packages/types/Calendar.d.ts` now declares:
+```ts
+createEvent(event: CalendarEvent, credentialId: number): Promise<NewCalendarEventType>;
+```
+
+But `LarkCalendarService.createEvent` and `Office365CalendarService.createEvent` don't accept `credentialId`. Only `GoogleCalendarService` uses it. If this is an interface method, all implementers need to accept it (even if they ignore it). The Lark and Office365 services will break at the type level unless TypeScript is being lenient here because of how they're called. Either way, it's a leaky abstraction — you're pushing Google-specific concerns into the generic `Calendar` interface.
+
+A better approach: Google Calendar should find its own credential from `calEvent.destinationCalendar` internally, or the credential lookup should happen in `CalendarManager.createEvent` before delegating.
+
+### 7. `mainHostDestinationCalendar` destructure pattern repeated everywhere
+
+```ts
+const [mainHostDestinationCalendar] = event.destinationCalendar ?? [];
+```
+
+This appears ~8 times across the codebase. The concept of "main host's calendar" deserves a named accessor — `getMainHostCalendar(event)` — that also handles the null/empty case cleanly.
+
+---
+
+## Questionable Changes
+
+### 8. `loadUsers` rewrite in `handleNewBooking.ts` — scope creep
+
+The `loadUsers` function was rewritten from a concise ternary chain into a verbose try/catch with manual error wrapping. The new version:
+- Removes the `organization` select (was that intentional? Could break org-aware logic downstream)
+- Adds generic error handling that swallows the real error message behind `"Unable to load users"`
+- Adds an `Array.isArray(hosts)` check that's unnecessary — TypeScript already knows the type
+
+This looks like AI-generated defensive coding. The original was fine — terse but correct. If there was an actual bug here, the PR description should call it out.
+
+### 9. Organization creation logic flip
+
+`packages/trpc/server/routers/viewer/organizations/create.handler.ts`
+
+```ts
+// Before
+...(!IS_TEAM_BILLING_ENABLED && { slug }),
+// After
+...(IS_TEAM_BILLING_ENABLED ? { slug } : {}),
+```
+
+These have **opposite semantics**. The original sets `slug` when billing is NOT enabled. The new version sets `slug` when billing IS enabled. If this is a bug fix, it should be in a separate PR with its own explanation. If it's unintentional, it's a regression in org creation.
+
+### 10. The `calenderExternalId` typo lives on
+
+```ts
+let calenderExternalId: string | null = null;
+```
+
+"calender" → "calendar". It was there before, but if you're rewriting these blocks anyway, fix the typo. It's in the variable name so it's not a breaking change.
+
+---
+
+## Minor Issues
+
+- **Duplicate `if (!calendarReference)` removed** in `EventManager.ts:570` — good catch, that was clearly a bug.
+- **`organiser` → `organizer` spelling fix** in `CalendarManager.ts:230` — fine, but unrelated to the PR's purpose.
+- **`orginalBookingDuration` → `originalBookingDuration`** typo fix in `handleNewBooking.ts` — same, unrelated.
+- **Import cleanup** in `builder.ts` (`type` import separated) — fine.
+- **Empty comment** in `GoogleCalendarService.ts:145`: `// Find in calEventRaw.destinationCalendar the one with the same credentialId` followed by a blank line. The comment restates the code. Delete it.
+
+---
+
+## Prioritized Recommendations
+
+**Must fix before merge:**
+1. Fix the dead `.find()` logic in Google Calendar `updateEvent`/`deleteEvent` — this is a correctness bug
+2. Add null guard for `mainHostDestinationCalendar` in `EventManager.ts:117` — this will crash
+3. Extract the credential-fetching pattern into a shared helper — three copies is unacceptable
+4. Verify the organization `slug` logic flip is intentional — if not, revert it
+5. Investigate the `requestReschedule` fallback — the original bug was preserved
+
+**Should fix:**
+6. Extract `toDestinationCalendarArray()` helper for the 9+ wrapping sites
+7. Extract `getMainHostCalendar()` for the 8+ destructure sites
+8. Reconsider pushing `credentialId` into the `Calendar` interface — find a cleaner abstraction
+9. Revert the `loadUsers` over-engineering or justify it
+
+**Nitpicks:**
+10. Fix `calenderExternalId` typo
+11. Remove the restating comment in GoogleCalendarService
+12. Split unrelated fixes (typos, spelling, org logic) into separate commits

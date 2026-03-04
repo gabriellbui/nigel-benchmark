@@ -1,0 +1,117 @@
+## This needs work.
+
+There's a reasonable idea buried in here — centralizing OAuth refresh logic and enabling credential sync for self-hosters — but the execution has several issues that range from "this will blow up in production" to "this is misleading anyone who reads it."
+
+---
+
+### Critical Issues
+
+**1. `parseRefreshTokenResponse` is broken nonsense**
+`packages/app-store/_utils/oauth/parseRefreshTokenResponse.ts`
+
+```ts
+const minimumTokenResponseSchema = z.object({
+  access_token: z.string(),
+  [z.string().toString()]: z.number(),
+  [z.string().optional().toString()]: z.unknown().optional(),
+});
+```
+
+This is not how Zod works. `z.string().toString()` evaluates to a static string representation of the Zod type (something like `"ZodString"`), not a dynamic key matcher. You're defining an object with literal computed property names that are Zod's internal string representations. This schema does **not** validate "any property with a number" — it validates a property literally named whatever `z.string().toString()` returns. This is cargo-cult code that looks like someone asked an AI to "make a flexible Zod schema" without understanding Zod's API. Use `z.record()` or `.passthrough()` if you need flexible keys.
+
+**2. Silent refresh token fabrication**
+`packages/app-store/_utils/oauth/parseRefreshTokenResponse.ts:25-27`
+
+```ts
+if (!refreshTokenResponse.data.refresh_token) {
+  refreshTokenResponse.data.refresh_token = "refresh_token";
+}
+```
+
+You're **inventing** a refresh token when one isn't present, setting it to the literal string `"refresh_token"`. This is a time bomb. When the system later tries to use this fake token to refresh credentials, it will fail with an opaque error that nobody will trace back to this line. If the provider doesn't return a refresh token, that's meaningful — handle it explicitly, don't paper over it with a magic string.
+
+**3. Return type inconsistency in `parseRefreshTokenResponse`**
+
+The function returns the `SafeParseReturnType` (the result of `.safeParse()`), but the call sites are inconsistent about this. In `GoogleCalendarService`, the return value is used directly as `key` in a Prisma update — meaning you're storing the Zod SafeParse wrapper object (`{ success, data, error }`) as the credential key, not the actual parsed data. In `Office365CalendarService`, it accesses `.success` and `.data`, which is correct. In `ZoomVideoApiAdapter`, it also accesses `.success`, which is correct. The Google Calendar usage is a data corruption bug.
+
+**4. Webhook endpoint has no rate limiting or HTTP method check**
+`apps/web/pages/api/webhook/app-credential.ts`
+
+No check for `req.method === "POST"`. Any HTTP method hits this handler. No rate limiting on an endpoint that writes credentials to the database. The timing-unsafe comparison of the webhook secret (`!==`) is vulnerable to timing attacks — use `crypto.timingSafeEqual` instead.
+
+---
+
+### Design Issues
+
+**5. `refreshOAuthTokens` is a leaky abstraction**
+`packages/app-store/_utils/oauth/refreshOAuthTokens.ts`
+
+This function takes a `refreshFunction` that returns `any`, then conditionally ignores it entirely and calls a completely different endpoint. The caller wraps their refresh logic in a closure that may never execute. This is confusing — the function signature suggests "wrap your refresh logic" but the behavior is "maybe use your logic, maybe do something completely unrelated." The return types are also inconsistent: when using the sync endpoint, it returns a raw `Response` object from `fetch()`. When using the passed function, it returns whatever that function returns (which could be a Google auth response, an Axios response, a Hubspot token, etc.). Callers that do `await response.json()` or access `.data` will blow up depending on which branch executed.
+
+**6. Inconsistent error handling across integrations**
+
+The Office365 calendar service had error logging that was **removed**:
+```ts
+// REMOVED:
+if (!tokenResponse.success) {
+  console.error("Outlook error grabbing new tokens ~ zodError:", ...);
+}
+```
+
+Now if token parsing fails, it silently continues with stale credentials. This is a regression, not an improvement.
+
+**7. Salesforce gets special treatment for no clear reason**
+`packages/app-store/salesforce/lib/CalendarService.ts`
+
+Salesforce got a manual refresh token flow added directly in the constructor instead of using `refreshOAuthTokens` like every other integration. If you're building a centralized refresh mechanism, use it everywhere or explain why this one is different.
+
+---
+
+### Minor Issues
+
+**8. Empty JSDoc comment**
+`apps/web/pages/api/webhook/app-credential.ts:16`
+```ts
+/** */
+export default async function handler(...)
+```
+Either write something useful or delete it.
+
+**9. The `.env.example` comment says "must be 32 bytes" but the command generates 24 bytes**
+```
+# must be 32 bytes for AES256 encryption algorithm
+# You can use: `openssl rand -base64 24` to generate one
+```
+`openssl rand -base64 24` generates 24 random bytes encoded as 32 base64 characters. If the decryption function expects 32 raw bytes, this won't work. If it expects 32 base64 characters (which decode to 24 bytes), the comment is misleading. Clarify which it is.
+
+**10. Fallback to empty string for encryption key**
+`apps/web/pages/api/webhook/app-credential.ts:57`
+```ts
+symmetricDecrypt(reqBody.keys, process.env.CALCOM_APP_CREDENTIAL_ENCRYPTION_KEY || "")
+```
+If the encryption key isn't set, you're passing an empty string to a decryption function. This will either throw a cryptic crypto error or (worse) succeed with garbage. Fail fast with a clear message instead.
+
+**11. File reorganization is fine but incomplete**
+
+Moving OAuth utils to `_utils/oauth/` is a reasonable organizational choice, but there's no barrel export (`index.ts`). Every consumer imports individual files with long paths. Not a blocker, but a missed opportunity.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix:**
+1. Rewrite `minimumTokenResponseSchema` — it doesn't do what you think it does
+2. Remove the fake refresh token assignment — handle missing tokens explicitly
+3. Fix the Google Calendar `parseRefreshTokenResponse` usage — it's storing the SafeParse wrapper, not the data
+4. Make `refreshOAuthTokens` return a consistent type, or split it into two functions
+5. Add timing-safe comparison for webhook secret and HTTP method check
+
+**Should fix:**
+6. Restore error logging that was removed from Office365
+7. Either route Salesforce through `refreshOAuthTokens` or document why it's different
+8. Fail fast on missing encryption key instead of falling back to empty string
+9. Fix the 24 bytes vs 32 bytes confusion in `.env.example`
+
+**Nitpicks:**
+10. Delete the empty JSDoc comment
+11. Consider a barrel export for the new `oauth/` directory

@@ -1,0 +1,16 @@
+{
+  "issues": [
+    "Using `===` to compare two dayjs objects compares references, not values, so the equality check in `checkIfIsAvailable` is dead code that will never be true. It should use `.isSame()` instead.",
+    "The `end` variable in the working hours boundary check is computed from `slotStartTime` instead of `slotEndTime`, making it identical to `start`. This means events extending past the end of working hours will incorrectly pass the check.",
+    "The UTC offset calculation using `dayjs(...).utc().add(offset, \"minute\")` is repeated four times for `startTime` and `endTime` instead of being extracted into variables or a helper. Also, `.start.toString()` on a Date produces implementation-dependent string formatting; the Date should be passed directly to dayjs.",
+    "The UTC offset calculation uses different approaches in two files (`inviteeUtcOffset - organizerUtcOffset` vs `organizerUtcOffset * -1`), creating inconsistency. The pattern should be centralized so future developers don't adopt the wrong one.",
+    "The `checkIfIsAvailable` function is overloaded with three distinct responsibilities (busy-time checking, date override checking, and working hours checking) with a ballooning signature of optional parameters. These concerns should be separated or extracted into named helpers.",
+    "`.find()` is used for its side effect of mutating the outer `dateOverrideExist` variable while also using its return value as a conditional. This is confusing and works only by accident because `.find()` is synchronous. It should be split into explicit steps.",
+    "Adding `timeZone?: string` to the `TimeRange` type couples timezone awareness into a previously timezone-agnostic type, forcing every consumer to consider whether the field is relevant. A wrapper type would be more appropriate.",
+    "Whitespace-only changes (removing blank lines, trailing whitespace) are mixed in with logic changes, polluting the diff. These should be in a separate commit.",
+    "Comments are missing a space after `//` and lack punctuation, e.g. `//check if date override for slot exists`.",
+    "The `!!activeOverrides.length` pattern is used instead of the clearer `array.length > 0`.",
+    "There are no tests for the new working hours boundary check logic in `checkIfIsAvailable`, which already contains a bug.",
+    "There are no tests for edge cases around DST transitions, where timezone offset code could produce different offsets for the same wall-clock time during a DST boundary."
+  ]
+}

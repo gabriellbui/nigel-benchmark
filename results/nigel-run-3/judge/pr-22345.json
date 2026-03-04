@@ -1,0 +1,19 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.99,
+      "evidence": "authConditions is *never* null \u2014 buildAuthorizationConditions always returns a Prisma.Sql. So the filterConditions-only branch is dead code. Meanwhile, the final else returning NOTHING_CONDITION is also unreachable. This method has four branches where only two can ever execute.",
+      "reasoning": "The review identifies the exact same root cause: getAuthorizationConditions always returns a non-null Prisma.Sql, making authConditions always truthy, which renders the else if (filterConditions) and final else branches unreachable dead code."
+    },
+    {
+      "bug_idx": 1,
+      "match": false,
+      "confidence": 0.8,
+      "evidence": "Same issue exists in buildOrgAuthorizationCondition \u2014 the old code had a conditional too, but it was explicit with the spread. Worth a comment either way since this is authorization logic and silent behavior changes here are dangerous.",
+      "reasoning": "The review discusses empty userIds arrays silently dropping OR clauses in the SQL condition builder, but the golden bug is specifically about the teamsFromOrg.length > 0 guard preventing userIdsFromOrg from being fetched at all for orgs without child teams \u2014 a different root cause at a different step in the logic."
+    }
+  ],
+  "bugs": 2
+}

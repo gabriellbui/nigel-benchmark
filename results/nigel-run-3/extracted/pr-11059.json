@@ -1,0 +1,18 @@
+{
+  "issues": [
+    "Webhook secret comparison using `!==` is vulnerable to timing attacks. Should use `crypto.timingSafeEqual` or a constant-time comparison for the secret check.",
+    "Decrypting with an empty string fallback when `CALCOM_APP_CREDENTIAL_ENCRYPTION_KEY` env var is missing. This will either throw a cryptic error or silently produce garbage instead of failing explicitly.",
+    "Webhook handler does not verify `req.method === \"POST\"`, so a GET request could behave unpredictably with `req.body` parsing.",
+    "Internal user IDs are echoed back in webhook API responses, leaking information. Should return a generic success message instead.",
+    "The Zod schema in `parseRefreshTokenResponse` uses `z.string().toString()` as computed property keys, which evaluates to static strings like `\"ZodString\"` rather than creating dynamic property matchers. The schema does nothing useful beyond checking `access_token` exists.",
+    "When no refresh token is present in the response, the code injects a literal string `\"refresh_token\"` as a fake value. This magic string will silently pass validation but fail at runtime when any OAuth provider tries to use it.",
+    "The return type of `parseRefreshTokenResponse` (a `SafeParseReturnType` with `{ success, data }` wrapper) is used inconsistently across callers. The Google Calendar caller passes it directly to `prisma.credential.update` expecting a plain object, which would store the wrapper object in the database, causing data corruption.",
+    "`refreshOAuthTokens` returns a `fetch` `Response` object when credential sharing is enabled but returns varying types (GaxiosResponse, TokenResponseIF, etc.) when disabled. Callers assume a specific type, leading to runtime crashes when credential sharing is toggled.",
+    "The `refreshOAuthTokens` wrapper only abstracts the endpoint selection but doesn't handle response parsing, error handling, or credential persistence, forcing every caller to still implement these differently. It's a half-committed refactor that doesn't deliver meaningful abstraction.",
+    "Moving `encodeOAuthState`, `decodeOAuthState`, and `createOAuthAppCredential` into an `oauth/` subdirectory touches ~20 files for no functional benefit, and no barrel export is provided for clean imports.",
+    "Empty JSDoc comment `/** */` exists in the webhook handler and should be removed.",
+    "A commented-out line in the webhook handler has mismatched indentation suggesting sloppy copy-paste.",
+    "Zoho Bigin integration changed from using dynamic `appConfig.slug` to a hardcoded `\"zoho-bigin\"` string in the redirect URI, replacing a dynamic reference with a magic string.",
+    "`APP_CREDENTIAL_SHARING_ENABLED` evaluates to either `undefined` or the string value of the encryption key env var, not a boolean. It should be wrapped in `Boolean()` or `!!` for clarity."
+  ]
+}

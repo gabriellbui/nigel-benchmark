@@ -1,0 +1,16 @@
+{
+  "issues": [
+    "When immediateDelete is true, deleteScheduledEmailReminder cancels the SendGrid scheduled send but then returns without deleting or marking the WorkflowReminder database record, leaving orphaned rows on every reschedule, workflow deletion, and step deletion.",
+    "The old code called the SendGrid DELETE endpoint (/v3/user/scheduled_sends/${referenceId}) after the cancel POST to clean up SendGrid resources. That call is entirely removed, leaving SendGrid scheduled send resources hanging.",
+    "Async deletion functions are called inside forEach loops without being awaited across multiple files (handleCancelBooking.ts, workflows.tsx, handleNewBooking.ts), meaning promises are fire-and-forget and errors are silently lost.",
+    "The try/catch in handleNewBooking.ts around the forEach block is misleading \u2014 it gives the illusion of error handling but will never catch anything because the async promises are already dispatched and forgotten.",
+    "The old code collected Prisma deletions into arrays and awaited them via Promise.all. This PR removed that safety net, making DB operation handling strictly worse than before.",
+    "The cron job in scheduleEmailReminders.ts unconditionally sends reminder.referenceId as batch_id to SendGrid, but referenceId can be null. A single null value will blow up the entire sequential batch processing loop since it runs inside a single try/catch.",
+    "The cancellation API uses a boolean immediateDelete flag to switch between two very different behaviors (soft cancel vs. immediate cancel), which is unclear and requires reading the implementation to understand. An enum or separate functions would be clearer.",
+    "deleteScheduledEmailReminder and deleteScheduledSMSReminder have asymmetric cancellation strategies (email has soft and immediate cancel, SMS always hard deletes) with no documented contract explaining the design.",
+    "The old code had a defense-in-depth authorization check on reminder deletion (where: { id: reminder.id, booking: { userId: ctx.user.id } }). The new code removes this user ownership check on the write operation, silently regressing security posture.",
+    "Lines ~901-963 in workflows.tsx have completely mangled indentation (everything left-aligned instead of properly indented), which will cause permanent noise in git blame.",
+    "WorkflowStepContainer.tsx changed the condition from (isPhoneNumberNeeded || isSenderIdNeeded) to just isPhoneNumberNeeded, silently dropping the isSenderIdNeeded case and potentially breaking sender ID configuration. This change is orthogonal to reminder cancellation.",
+    "Comments throughout the PR only restate what the code does rather than explaining why, such as why booking cancel uses deferred while reschedule uses immediate, or why SMS always hard-deletes while email has two strategies."
+  ]
+}

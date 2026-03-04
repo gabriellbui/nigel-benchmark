@@ -1,0 +1,33 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "BackupCode.tsx exports as TwoFactor \u2014 line 7. The file is BackupCode.tsx but the component function is named TwoFactor. This is confusing.",
+      "reasoning": "The review explicitly identifies the same naming inconsistency: the exported function is named TwoFactor but lives in BackupCode.tsx."
+    },
+    {
+      "bug_idx": 1,
+      "match": false,
+      "confidence": 0.95,
+      "evidence": "",
+      "reasoning": "The review discusses the backup code logic in the disable endpoint extensively but never identifies that the error message incorrectly references 'backup code login' instead of 'backup code disable' \u2014 the review focuses on code invalidation, not incorrect error message wording."
+    },
+    {
+      "bug_idx": 2,
+      "match": false,
+      "confidence": 0.95,
+      "evidence": "",
+      "reasoning": "The review mentions indexOf in points #2 and #4 but only discusses null pollution and code duplication respectively \u2014 it never identifies the case-sensitivity defect that causes validation failure when users enter uppercase hex characters."
+    },
+    {
+      "bug_idx": 3,
+      "match": false,
+      "confidence": 0.95,
+      "evidence": "",
+      "reasoning": "The review discusses backup code issues (null assignment, non-consumption in disable flow, early generation) but never identifies the concurrency race condition where two simultaneous login requests could both validate and accept the same backup code due to non-atomic read-check-update of the in-memory decrypted array."
+    }
+  ],
+  "bugs": 4
+}

@@ -1,0 +1,9 @@
+{
+  "issues": [
+    "In four separate locations (vital/lib/reschedule.ts, wipemycalother/lib/reschedule.ts, bookings.tsx:553, handleCancelBooking.ts:458), async callbacks are used inside .forEach(), which does not await async callbacks. This means promises are fire-and-forget: surrounding try/catch blocks will never catch errors from these operations, and code after the forEach runs before the async operations complete.",
+    "The PR correctly fixes the async .forEach() pattern in one spot (handleCancelBooking.ts:474-480) by converting to a for...of loop, but introduces the exact same bug in the other four locations. The fix needs to be applied consistently.",
+    "The appStore object calls import() immediately for all 28 entries when the module is evaluated, firing them all in parallel eagerly rather than lazily. If the goal is deferred/lazy loading, the imports should be wrapped in thunks (arrow functions) instead of being invoked directly.",
+    "In CalendarManager.ts:28, getCalendarCredentials calls getCalendar(credential) synchronously, but getCalendar is now async, so the calendar field in the returned data structure is secretly a Promise rather than the resolved value. This is an implicit type change that acts as a landmine for future consumers of this data.",
+    "CalendarManager.ts:31 has a random blank line added that is pure noise in the diff."
+  ]
+}

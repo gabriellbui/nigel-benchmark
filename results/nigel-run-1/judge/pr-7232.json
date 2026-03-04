@@ -1,0 +1,19 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "Fire-and-forget async calls in `.forEach()` \u2014 These are async functions doing DB writes and external API calls. The returned promises are discarded. Errors vanish. Operations may not complete before the response is sent. `Promise.all` + `.map()` instead of `.forEach()`.",
+      "reasoning": "The review explicitly identifies the same defect: async deleteScheduledEmailReminder/deleteScheduledSMSReminder calls inside forEach loops are not awaited, causing promises to be discarded and operations to potentially not complete, which matches the golden bug's diagnosis exactly."
+    },
+    {
+      "bug_idx": 1,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "when `immediateDelete` is `true`, it cancels via SendGrid then `return`s. The `WorkflowReminder` row is never deleted or marked cancelled. Every workflow/step deletion leaks a row.",
+      "reasoning": "The review explicitly identifies that the immediateDelete=true path cancels the SendGrid email but fails to delete or update the WorkflowReminder database record, which is precisely the orphaned database entry defect described in the golden bug."
+    }
+  ],
+  "bugs": 2
+}

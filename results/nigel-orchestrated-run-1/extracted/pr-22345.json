@@ -1,0 +1,11 @@
+{
+  "issues": [
+    "In `buildOrgAuthorizationCondition`, `teamIds` is used unconditionally in `ANY()` without a length guard for empty arrays, unlike `userIdsFromOrg` which gets an explicit length check. If `teamsFromOrg` returns an empty array, the behavior of `Prisma.sql` interpolating an empty JS array into `ANY()` is undefined and could cause a runtime error.",
+    "`getBaseConditions()` returns a raw `Prisma.Sql` fragment that callers must manually interpolate into their own queries, requiring them to know the table name and where to place conditions. This scatters authorization logic across every callsite, and if a caller forgets `WHERE ${baseConditions}`, authorization is silently bypassed.",
+    "`InsightsBookingServicePublicOptions` is a redundant type that makes `teamId` optional regardless of scope, discarding the constraints enforced by the existing Zod-inferred discriminated union `InsightsBookingServiceOptions`. Callers can now pass `{ scope: \"team\", userId: 1, orgId: 1 }` without `teamId` \u2014 TypeScript won't complain, but Zod will reject at runtime.",
+    "The same `reduce` pattern for joining SQL conditions appears three times in `buildFilterConditions`, `buildOrgAuthorizationCondition`, and `buildTeamAuthorizationCondition`, differing only by `AND` vs `OR`. This duplication should be extracted into helpers. Additionally, `reduce` with no initial value on an empty array throws a TypeError, currently only guarded by upstream checks.",
+    "The tests now assert on `Prisma.Sql` object equality to verify SQL string construction rather than executing queries against the database and asserting on returned rows. Any semantically equivalent SQL change (e.g., `ANY()` to `IN()`, reordering, adding parens) will break these tests despite identical behavior.",
+    "The entire `describe(\"Caching\")` test block was removed, but the caching mechanism (`cachedAuthConditions`, `cachedFilterConditions`) still exists. Caching in an authorization service is critical \u2014 if it breaks, you get inconsistent authorization under load.",
+    "In `getBaseConditions`, `getAuthorizationConditions()` always returns `Prisma.Sql` and never null/falsy, making the branches handling falsy `authConditions` dead code that should be simplified."
+  ]
+}

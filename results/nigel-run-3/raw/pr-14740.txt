@@ -1,0 +1,140 @@
+## This needs work.
+
+The feature intent is fine — adding guests to existing bookings is a reasonable capability. But the implementation has some real problems that range from security gaps to sloppy abstractions. Let me break it down.
+
+---
+
+### Security Issues (Must Fix)
+
+**1. Broken authorization logic — `addGuests.handler.ts:47-48`**
+
+```typescript
+const isTeamAdminOrOwner =
+    (await isTeamAdmin(user.id, booking.eventType?.teamId ?? 0)) &&
+    (await isTeamOwner(user.id, booking.eventType?.teamId ?? 0));
+```
+
+This uses `&&` (AND) — meaning you must be **both** admin AND owner. That's almost certainly wrong; it should be `||` (OR). As written, admins who aren't owners get rejected. Also, passing `0` as a fallback teamId when there's no team is sketchy — you're asking "is this user admin of team 0?" which could produce weird results depending on the query implementation. Guard against `null` teamId explicitly.
+
+**2. Any attendee can add guests — `addGuests.handler.ts:51`**
+
+```typescript
+const isAttendee = !!booking.attendees.find((attendee) => attendee.email === user.email);
+```
+
+So any attendee on a booking can add arbitrary guests? That's a policy decision that should at minimum be configurable per event type. Letting any random attendee inject new people into someone else's calendar without the organizer's consent is a bold default. If this is intentional, it needs a comment explaining why.
+
+**3. No rate limiting or guest count cap**
+
+There's nothing stopping someone from adding 500 guests to a booking. No `maxGuests` check, no rate limit. This is an email-sending endpoint — it's begging to be abused as a spam relay.
+
+---
+
+### Design Issues (Should Fix)
+
+**4. Duplicate validation schema — `AddGuestsDialog.tsx:29-33`**
+
+```typescript
+const ZAddGuestsInputSchema = z.array(z.string().email()).refine((emails) => {
+    const uniqueEmails = new Set(emails);
+    return uniqueEmails.size === emails.length;
+});
+```
+
+You already have `ZAddGuestsInputSchema` in `addGuests.schema.ts`. Now there's a second, *different* schema defined inside a component render function (recreated every render, by the way). The server schema doesn't check uniqueness, the client schema does. Pick one source of truth.
+
+**5. Redundant organizer fetch — `addGuests.handler.ts:56-66`**
+
+```typescript
+const organizer = await prisma.user.findFirstOrThrow({
+    where: {
+      id: booking.userId || 0,
+    },
+    ...
+});
+```
+
+You already included `user` in the booking query with `include: { user: { ... } }`. Now you're hitting the database again for the same user. Use `booking.user`.
+
+**6. Silent email failure — `addGuests.handler.ts:166-168`**
+
+```typescript
+try {
+    await sendAddGuestsEmails(evt, guests);
+} catch (err) {
+    console.log("Error sending AddGuestsEmails");
+}
+```
+
+You swallow the error and `console.log` a string with zero useful information. No error object, no booking ID, no guest list. If emails fail in production, good luck debugging this. At minimum log the actual error and the booking context.
+
+**7. `newGuests` parameter unused in email manager — `email-manager.ts:523`**
+
+```typescript
+export const sendAddGuestsEmails = async (calEvent: CalendarEvent, newGuests: string[]) => {
+```
+
+The `newGuests` parameter is accepted but the function uses `calendarEvent.attendees` and checks `newGuests.includes(attendee.email)` — but `calendarEvent` is a reformatted copy of `calEvent`. Are you sure the attendee emails survive the `formatCalEvent` transformation intact? This needs verification, not assumption.
+
+---
+
+### Abstraction Problems
+
+**8. `MultiEmail` component — `packages/ui/form/MultiEmail.tsx`**
+
+The empty-state logic is awkward:
+
+```typescript
+{value.length ? (
+    <div>...</div>
+) : (
+    <></>
+)}
+
+{!value.length && !readOnly && (
+    <Button ... />
+)}
+```
+
+Two separate conditional blocks that are mutually exclusive. Just use an if/else. Also, `value = value || []` inside the component body is a code smell — handle this at the prop level with a default value or in the parent.
+
+**9. The lazy loading wrapper is suspicious — `MultiEmailLazy.tsx:4`**
+
+```typescript
+/** These are like 40kb that not every user needs */
+const MultiEmail = dynamic(() => import("./MultiEmail")) as unknown as typeof import("./MultiEmail").default;
+```
+
+`as unknown as` — the classic "I give up on types" cast. If the types don't line up, fix them. Don't lie to the compiler. Also, "like 40kb" — is it actually? This component is just a few input fields and buttons. That comment reads like it was copied from somewhere else.
+
+---
+
+### Minor Issues (Nitpicks)
+
+**10.** `multiEmailValue` initialized with `[""]` not `[]` in the dialog. That means the dialog opens with one empty input field, which is fine UX-wise, but then `handleAdd` checks `multiEmailValue.length === 0` which will never be true given this initial state.
+
+**11.** The action ID is `"add_members"` in `BookingListItem.tsx` but the feature is about guests, not members. Be consistent with terminology.
+
+**12.** `email-manager.ts:522-523` — missing blank line between `sendLocationChangeEmails` closing brace and `sendAddGuestsEmails`. Minor but suggests careless placement.
+
+---
+
+### Prioritized Recommendations
+
+**Must change:**
+1. Fix the `&&` → `||` in authorization (or document why AND is intentional)
+2. Add a guest count limit
+3. Stop recreating the Zod schema on every render; share the server schema or at minimum move it outside the component
+4. Remove the redundant organizer DB query
+
+**Should change:**
+5. Log actual errors when email sending fails
+6. Verify `newGuests` parameter is actually being used correctly through `formatCalEvent`
+7. Discuss whether attendees should be able to add guests without organizer approval
+
+**Nitpicks:**
+8. Fix `add_members` → `add_guests` for consistency
+9. Clean up `MultiEmail` conditional rendering
+10. Remove the `as unknown as` type assertion in the lazy wrapper
+
+The bones are here but the authorization logic alone is a blocker. Don't ship this without fixing the AND/OR bug — it's either a security hole or a permissions bug depending on which direction you intended.

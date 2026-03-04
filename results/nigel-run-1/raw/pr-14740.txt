@@ -1,0 +1,111 @@
+## This needs work.
+
+The feature itself is reasonable — letting users add guests to existing bookings is a legitimate need. But the implementation has some real problems that'll bite you in production.
+
+---
+
+### Design Issues
+
+**1. Broken authorization logic** — `addGuests.handler.ts:51-52`
+
+```ts
+const isTeamAdminOrOwner =
+    (await isTeamAdmin(user.id, booking.eventType?.teamId ?? 0)) &&
+    (await isTeamOwner(user.id, booking.eventType?.teamId ?? 0));
+```
+
+This uses `&&` — meaning someone must be **both** admin AND owner. That's almost certainly wrong; you want `||`. Also, passing `0` as a fallback teamId when there's no team will query for a non-existent team rather than short-circuiting. This authorization check is silently broken for team admins who aren't also owners.
+
+**2. Duplicate Zod schema** — `AddGuestsDialog.tsx:29-33`
+
+```ts
+const ZAddGuestsInputSchema = z.array(z.string().email()).refine((emails) => {
+    const uniqueEmails = new Set(emails);
+    return uniqueEmails.size === emails.length;
+});
+```
+
+There's already `ZAddGuestsInputSchema` in `addGuests.schema.ts`. The client-side one adds a uniqueness refinement that the server schema doesn't have, and the server schema wraps it in an object the client one doesn't. Pick one source of truth. The server should be the authority on validation — if you want uniqueness checking, add it to the shared schema and import it.
+
+**3. Guest attendees get organizer's timezone and locale** — `addGuests.handler.ts:87-92`
+
+```ts
+const guestsFullDetails = uniqueGuests.map((guest) => {
+    return {
+      name: "",
+      email: guest,
+      timeZone: organizer.timeZone,
+      locale: organizer.locale,
+    };
+});
+```
+
+New guests are assigned the organizer's timezone and locale. So someone in Tokyo gets an ICS event with the organizer's New York timezone? This will generate confusing calendar invites. At minimum, this deserves a comment explaining the tradeoff, or better yet, don't assume.
+
+**4. Redundant database query** — `addGuests.handler.ts:24-45` and `addGuests.handler.ts:57-66`
+
+The initial `booking` query includes the user with `credentials`, then you separately query `organizer` with a subset of user fields. `booking.user` already has the organizer data — you're making a redundant database round-trip.
+
+**5. Silent email failure** — `addGuests.handler.ts:166-168`
+
+```ts
+try {
+    await sendAddGuestsEmails(evt, guests);
+} catch (err) {
+    console.log("Error sending AddGuestsEmails");
+}
+```
+
+You swallow the error and `console.log` with no details. The original error object (`err`) is discarded entirely. The user gets a success response, the guests never get notified, and nobody has any debugging information. At least log `err`, and consider whether this should surface to the user.
+
+**6. `BLACKLISTED_GUEST_EMAILS` via env var** — `addGuests.handler.ts:76-78`
+
+```ts
+const blacklistedGuestEmails = process.env.BLACKLISTED_GUEST_EMAILS
+    ? process.env.BLACKLISTED_GUEST_EMAILS.split(",").map((email) => email.toLowerCase())
+    : [];
+```
+
+Parsing a comma-separated env var on every request with no caching and no validation. If this is a real feature, it belongs in a config module. If it's not, why is it here? Also, guest emails aren't lowercased before comparison, so `User@Example.com` bypasses the blacklist.
+
+---
+
+### Abstraction Problems
+
+**7. `MultiEmail` component already exists?** — `packages/ui/form/MultiEmail.tsx`
+
+Before adding a brand new `MultiEmail` component, was there already one in the codebase? The lazy loading wrapper comment says "These are like 40kb that not every user needs" which suggests this was copied from somewhere. If there's an existing multi-email input (the booking flow must have one for the initial guest list), this should reuse it.
+
+**8. No shared event-building logic** — `addGuests.handler.ts:103-149`
+
+The entire `CalendarEvent` construction block is hand-assembled with the same pattern as `editLocation.handler`. This is a ~50 line blob of event construction that'll drift between handlers over time. This should be extracted to a shared utility.
+
+---
+
+### Nitpicks
+
+**9.** `multiEmailValue` initialized as `[""]` rather than `[]` — `AddGuestsDialog.tsx:35`. This means there's always a phantom empty string in the array, which is why you need the `length === 0` check in `handleAdd`. Initialize to `[]` and show the "add email" button when empty.
+
+**10.** `add_members` as the action id but `additional_guests` as the label — `BookingListItem.tsx:193-199`. Pick a consistent naming convention. Is it "members" or "guests"?
+
+**11.** The `isInvalidEmail` state in `AddGuestsDialog` is set to `true` but never cleared on subsequent valid input. User sees the error, fixes the email, and the error persists until they close and reopen the dialog.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix:**
+1. Authorization logic — `&&` should be `||`, and handle missing teamId properly
+2. Silent email failure — at minimum log the actual error
+3. Case-insensitive email comparison for the blacklist
+
+**Should fix:**
+4. Deduplicate the Zod schema — single source of truth
+5. Remove redundant organizer query
+6. Extract CalendarEvent construction to shared utility
+7. Guest timezone/locale assumption needs at least documentation
+
+**Nice to have:**
+8. Move blacklist to config module
+9. Clean up `multiEmailValue` initialization
+10. Clear validation error state on input change

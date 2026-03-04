@@ -1,6 +1,0 @@
-Target Bug,PR,Severity,Taxonomy Category,Caught?,Notes
-Case-sensitive indexOf on backup codes,10600,Medium,6a (String comparison),NO,"Nigel flagged indexOf for timing attacks but NOT case-sensitivity"
-TOCTOU race on backup codes,10600,High,6b (Concurrency),NO,"Found related atomicity issue on disable path; missed concurrent-request race on login path"
-Org members excluded by guard,22345,Medium,6c (Data integrity),NO,"Found empty-array asymmetry but not the conditional data exclusion"
-Case sensitivity bypass in blacklist,14740,High,6a (String comparison),YES,"Direct hit — taxonomy category 6a matched exactly"
-No dedup within input,14740,Medium,6c (Data integrity),NO,"Client-side Zod has uniqueness refine; may have assumed server-side was covered"

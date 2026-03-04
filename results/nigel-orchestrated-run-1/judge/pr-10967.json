@@ -1,0 +1,40 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.99,
+      "evidence": "If `destinationCalendar` is `null`, `undefined`, or empty, `mainHostDestinationCalendar` is `undefined`. Accessing `.integration` on `undefined` throws `TypeError`. Needs optional chaining: `mainHostDestinationCalendar?.integration`.",
+      "reasoning": "The review identifies the exact same defect: mainHostDestinationCalendar is undefined when evt.destinationCalendar is null or empty, causing a null reference crash when accessing .integration."
+    },
+    {
+      "bug_idx": 1,
+      "match": false,
+      "confidence": 0.95,
+      "evidence": "If `destinationCalendar` is `null`, `undefined`, or empty, `mainHostDestinationCalendar` is `undefined`. Accessing `.integration` on `undefined` throws `TypeError`. Needs optional chaining: `mainHostDestinationCalendar?.integration`.",
+      "reasoning": "The golden bug says the optional chaining is redundant (unnecessary) because the variable is already checked in the ternary; the review identifies the opposite problem \u2014 claiming optional chaining is missing and needed to prevent a crash \u2014 which is a different diagnosis of the same code area."
+    },
+    {
+      "bug_idx": 3,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "The condition for `slug` is inverted. This is a semantic change that looks like a bug. After: if billing ENABLED, set BOTH slug AND requestedSlug; if DISABLED, set NEITHER",
+      "reasoning": "The review explicitly identifies the same logic inversion in organizations/create.handler.ts where the slug condition was flipped from !IS_TEAM_BILLING_ENABLED to IS_TEAM_BILLING_ENABLED, resulting in both slug and requestedSlug being set when billing is enabled and neither when disabled, which matches the golden bug exactly."
+    },
+    {
+      "bug_idx": 4,
+      "match": true,
+      "confidence": 0.9,
+      "evidence": "The `Calendar` interface was changed to require `credentialId: number` in `createEvent`, but only Google Calendar actually uses it. Lark and Office365 still destructure `[0]` from the array (main host only).",
+      "reasoning": "The review identifies the same defect: the Calendar interface now requires credentialId in createEvent but Lark and Office365 implementations were not updated to match, which is exactly the interface contract violation described in the golden bug."
+    },
+    {
+      "bug_idx": 2,
+      "match": true,
+      "confidence": 0.9,
+      "evidence": "If `externalCalendarId` is falsy, we enter the else branch and search for a calendar whose `externalId === externalCalendarId` -- i.e., whose `externalId` equals a falsy value. This `.find()` is dead code. It will virtually never match. ... What was almost certainly intended: `cal.credentialId === this.credential.id`",
+      "reasoning": "Both the golden bug and the review identify the same defective `.find((cal) => cal.externalId === externalCalendarId)` logic in Google CalendarService as fundamentally broken, and both prescribe using credentialId instead \u2014 they differ slightly in framing (golden bug says 'when provided, matches itself' vs review says 'when falsy, dead code') but identify the same root cause and same fix."
+    }
+  ],
+  "bugs": 5
+}

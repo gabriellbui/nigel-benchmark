@@ -1,6 +1,6 @@
 # Nigel Benchmark
 
-Benchmark suite for [Nigel](https://github.com/gabriellbui/nigel), our code review agent, evaluated against the [withmartian/code-review-benchmark](https://github.com/withmartian/code-review-benchmark) dataset.
+Benchmark suite for [Nigel](https://github.com/vendurehq/ai-stack/tree/main/plugins/nigel), our code review agent, evaluated against the [withmartian/code-review-benchmark](https://github.com/withmartian/code-review-benchmark) dataset.
 
 ## Dataset
 
@@ -13,68 +13,101 @@ Benchmark suite for [Nigel](https://github.com/gabriellbui/nigel), our code revi
 
 ### Headline numbers
 
-| Tool | Model | Recall | Critical+High Recall |
-|------|-------|--------|----------------------|
-| Greptile | Unknown | 82% | -- |
-| **Nigel (avg)** | **Opus 4.6** | **75.8%** | **85.7%** |
-| Cursor | Unknown | 58% | -- |
-| Copilot | Unknown | 54% | -- |
-| Code-Review Plugin | Sonnet 4.6 | 51.6% | 71.4% |
-| CodeRabbit | Unknown | 44% | -- |
-| Graphite | Unknown | 6% | -- |
+| Tool                     | Model        | Recall     | Critical+High Recall |
+| ------------------------ | ------------ | ---------- | -------------------- |
+| **Nigel (orchestrated)** | **Opus 4.6** | **87.1%**  | **100.0%**           |
+| Greptile                 | Unknown      | 82%        | --                   |
+| **Nigel (baseline avg)** | **Opus 4.6** | **65.6%**  | **71.4%**            |
+| Cursor                   | Unknown      | 58%        | --                   |
+| Copilot                  | Unknown      | 54%        | --                   |
+| Code-Review Plugin       | Sonnet 4.6   | 51.6%      | 71.4%                |
+| CodeRabbit               | Unknown      | 44%        | --                   |
+| Graphite                 | Unknown      | 6%         | --                   |
 
-Nigel's average recall (75.8%) is the mean of Run 1 (77.4%) and Run 2 (74.2%).
+Nigel's baseline recall (65.6%) is the mean of 3 isolated runs (run-1–run-3), scored with the extract→judge pipeline (pairwise matching, stricter than single-pass). The orchestrated run uses the review orchestrator for multi-pass analysis.
 
-### Per-PR breakdown (Nigel Run 1)
+### Summary across runs
 
-| PR | Golden Bugs | Caught | Recall |
-|----|-------------|--------|--------|
-| pr-8087 | 2 | 2 | 100% |
-| pr-10600 | 4 | 1 | 25% |
-| pr-10967 | 5 | 4 | 80% |
-| pr-22345 | 2 | 1 | 50% |
-| pr-7232 | 2 | 2 | 100% |
-| pr-8330 | 2 | 2 | 100% |
-| pr-11059 | 5 | 5 | 100% |
-| pr-14943 | 2 | 2 | 100% |
-| pr-14740 | 5 | 3 | 60% |
-| pr-22532 | 2 | 2 | 100% |
-| **Total** | **31** | **24** | **77.4%** |
+| Run              | Recall     | Caught      | Critical      | High           | Medium       | Low          |
+| ---------------- | ---------- | ----------- | ------------- | -------------- | ------------ | ------------ |
+| run-1            | 61.3%      | 19/31       | 100.0% (2/2)  | 50.0% (6/12)   | 66.7% (6/9)  | 62.5% (5/8)  |
+| run-2            | 71.0%      | 22/31       | 100.0% (2/2)  | 83.3% (10/12)  | 66.7% (6/9)  | 50.0% (4/8)  |
+| run-3            | 64.5%      | 20/31       | 100.0% (2/2)  | 66.7% (8/12)   | 66.7% (6/9)  | 50.0% (4/8)  |
+| **Baseline avg** | **65.6%**  | **20.3/31** | **100.0%**    | **66.7%**      | **66.7%**    | **54.2%**    |
+| orchestrated-1   | 87.1%      | 27/31       | 100.0% (2/2)  | 100.0% (12/12) | 77.8% (7/9)  | 75.0% (6/8)  |
+
+### Per-PR breakdown (run-1)
+
+| PR        | Golden Bugs | Caught | Recall    |
+| --------- | ----------- | ------ | --------- |
+| pr-8087   | 2           | 1      | 50.0%     |
+| pr-10600  | 4           | 1      | 25.0%     |
+| pr-10967  | 5           | 3      | 60.0%     |
+| pr-22345  | 2           | 1      | 50.0%     |
+| pr-7232   | 2           | 2      | 100.0%    |
+| pr-8330   | 2           | 2      | 100.0%    |
+| pr-11059  | 5           | 2      | 40.0%     |
+| pr-14943  | 2           | 1      | 50.0%     |
+| pr-14740  | 5           | 4      | 80.0%     |
+| pr-22532  | 2           | 2      | 100.0%    |
+| **Total** | **31**      | **19** | **61.3%** |
+
+### Per-PR breakdown (run-2)
+
+| PR        | Golden Bugs | Caught | Recall    |
+| --------- | ----------- | ------ | --------- |
+| pr-8087   | 2           | 1      | 50.0%     |
+| pr-10600  | 4           | 1      | 25.0%     |
+| pr-10967  | 5           | 4      | 80.0%     |
+| pr-22345  | 2           | 1      | 50.0%     |
+| pr-7232   | 2           | 2      | 100.0%    |
+| pr-8330   | 2           | 2      | 100.0%    |
+| pr-11059  | 5           | 5      | 100.0%    |
+| pr-14943  | 2           | 2      | 100.0%    |
+| pr-14740  | 5           | 3      | 60.0%     |
+| pr-22532  | 2           | 1      | 50.0%     |
+| **Total** | **31**      | **22** | **71.0%** |
+
+### Per-PR breakdown (run-3)
+
+| PR        | Golden Bugs | Caught | Recall    |
+| --------- | ----------- | ------ | --------- |
+| pr-8087   | 2           | 1      | 50.0%     |
+| pr-10600  | 4           | 1      | 25.0%     |
+| pr-10967  | 5           | 3      | 60.0%     |
+| pr-22345  | 2           | 1      | 50.0%     |
+| pr-7232   | 2           | 2      | 100.0%    |
+| pr-8330   | 2           | 2      | 100.0%    |
+| pr-11059  | 5           | 5      | 100.0%    |
+| pr-14943  | 2           | 1      | 50.0%     |
+| pr-14740  | 5           | 3      | 60.0%     |
+| pr-22532  | 2           | 1      | 50.0%     |
+| **Total** | **31**      | **20** | **64.5%** |
+
+### Per-PR breakdown (orchestrated-run-1)
+
+| PR        | Golden Bugs | Caught | Recall    |
+| --------- | ----------- | ------ | --------- |
+| pr-8087   | 2           | 2      | 100.0%    |
+| pr-10600  | 4           | 4      | 100.0%    |
+| pr-10967  | 5           | 4      | 80.0%     |
+| pr-22345  | 2           | 1      | 50.0%     |
+| pr-7232   | 2           | 2      | 100.0%    |
+| pr-8330   | 2           | 2      | 100.0%    |
+| pr-11059  | 5           | 5      | 100.0%    |
+| pr-14943  | 2           | 2      | 100.0%    |
+| pr-14740  | 5           | 3      | 60.0%     |
+| pr-22532  | 2           | 2      | 100.0%    |
+| **Total** | **31**      | **27** | **87.1%** |
 
 ### Severity breakdown
 
-| Severity | Total | Caught | Recall |
-|----------|-------|--------|--------|
-| Critical | 2 | 2 | 100% |
-| High | 12 | 10 | 83.3% |
-| Medium | 9 | 6 | 66.7% |
-| Low | 8 | 6 | 75.0% |
-
-### Reproducibility
-
-Two independent runs showed 96.8% consistency — 30 of 31 bugs scored identically. The single difference was a Low-severity macOS sed syntax bug in pr-22532 that was caught in Run 1 but missed in Run 2.
-
-| Metric | Run 1 | Run 2 |
-|--------|-------|-------|
-| Recall | 77.4% | 74.2% |
-| Identical scores | 30/31 | 96.8% |
-
-### Nigel vs Code-Review Plugin
-
-Nigel outperformed the official Claude Code code-review plugin on 6 of 10 PRs, tied on 4, and lost on none. Overall recall delta: +25.8pp (77.4% vs 51.6%).
-
-## Repo structure
-
-```
-ground-truth/         # Annotated golden bugs
-diffs/                # Raw PR diffs (10 files)
-results/
-  nigel-baseline/     # Run 1 detailed results
-  nigel-run2/         # Run 2 results
-  code-review-plugin/ # Claude Code plugin results
-  comparisons/        # Cross-tool comparisons
-methodology.md        # Full benchmark methodology
-```
+| Severity | Total | run-1        | run-2         | run-3        | Baseline Avg | orchestrated-1  |
+| -------- | ----- | ------------ | ------------- | ------------ | ------------ | --------------- |
+| Critical | 2     | 100.0% (2/2) | 100.0% (2/2)  | 100.0% (2/2) | 100.0%       | 100.0% (2/2)    |
+| High     | 12    | 50.0% (6/12) | 83.3% (10/12) | 66.7% (8/12) | 66.7%        | 100.0% (12/12)  |
+| Medium   | 9     | 66.7% (6/9)  | 66.7% (6/9)   | 66.7% (6/9)  | 66.7%        | 77.8% (7/9)     |
+| Low      | 8     | 62.5% (5/8)  | 50.0% (4/8)   | 50.0% (4/8)  | 54.2%        | 75.0% (6/8)     |
 
 ## Running a new benchmark
 

@@ -1,0 +1,15 @@
+{
+  "issues": [
+    "Backup codes are not invalidated on disable: if the disable request fails after backup code validation (e.g., the prisma update throws), the backup code was verified but never consumed, allowing infinite retries with a stolen backup code.",
+    "When a backup code is used during login, it's replaced with `null` in the array instead of being removed. This leaves nulls polluting the array, and future refactors using `.find()` or `.includes()` with loose comparison could break silently. Should use `splice` to remove the entry.",
+    "Backup codes are generated and stored when the user starts 2FA setup (confirms password), not when they complete it (verify TOTP code). If the user abandons setup, backup codes exist in the database but 2FA isn't enabled.",
+    "Backup code decryption, validation, and indexOf check logic is duplicated in `totp/disable.ts` and `next-auth-options.ts`. Should be extracted into a shared function.",
+    "`formatBackupCode` is defined inside the `EnableTwoFactorModal` component and the magic numbers 5 and 10 for backup code format appear in multiple places with no single source of truth. Should live in a shared util.",
+    "`backupCodes` state in `EnableTwoFactorModal.tsx` is initialized as `useState([])` with no type annotation, causing TypeScript to infer `never[]`. Should be `useState<string[]>([])`.",
+    "`BackupCode.tsx` exports its component function as `TwoFactor` instead of `BackupCode`, causing confusion in React DevTools where two `TwoFactor` components are indistinguishable.",
+    "Nested ternary in JSX at `login.tsx:221` is hard to parse and a maintenance hazard. Should be simplified or extracted.",
+    "`resetForm` uses a boolean parameter defaulting to `true`, which is a readability trap. Consider using a named options object or separate calls.",
+    "Backup code login and backup code disable flows have no e2e test coverage, with only TODO/FIXME comments indicating missing tests. The two most critical flows for this feature are untested.",
+    "Object URL created for backup codes download is never revoked when the modal closes on first setup, causing a minor memory leak. Should use `useEffect` cleanup."
+  ]
+}

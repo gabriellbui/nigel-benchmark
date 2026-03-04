@@ -1,0 +1,19 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.99,
+      "evidence": "authConditions is always truthy \u2014 it returns Prisma.Sql, never null. getAuthorizationConditions() returns NOTHING_CONDITION (1=0) as its \"deny all\" sentinel, not null. So the else if (filterConditions) and else branches are dead code.",
+      "reasoning": "The review identifies the exact same defect: authConditions is always truthy because getAuthorizationConditions() always returns Prisma.Sql, making the else if (filterConditions) and else branches unreachable dead code."
+    },
+    {
+      "bug_idx": 1,
+      "match": false,
+      "confidence": 0.82,
+      "evidence": "But `buildOrgAuthorizationCondition` doesn't guard `teamIds` the same way. If `teamsFromOrg` returns empty, you get `\"teamId\" = ANY(ARRAY[])` which is valid PostgreSQL (evaluates to false) but inconsistent with how `userIdsFromOrg` is handled two lines later. Pick one pattern and stick with it.",
+      "reasoning": "The review notices the inconsistency between teamIds and userIdsFromOrg guards in buildOrgAuthorizationCondition, but diagnoses it as a consistency problem (suggesting adding MORE guards to teamIds), whereas the golden bug identifies that the guard on userIdsFromOrg is itself the defect because it excludes org-level members for orgs without child teams \u2014 a different diagnosis of overlapping code."
+    }
+  ],
+  "bugs": 2
+}

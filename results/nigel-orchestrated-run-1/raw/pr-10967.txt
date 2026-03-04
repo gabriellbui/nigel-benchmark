@@ -1,0 +1,130 @@
+## Nigel's Code Review: `fix: handle collective multiple host on destinationCalendar`
+
+### Overall Verdict: This Needs Serious Work
+
+The core idea is sound -- `destinationCalendar` needs to be an array to support collective events with multiple hosts. But the execution is riddled with confirmed logic bugs, a guaranteed runtime crash, triple-copy-pasted code, an unrelated and logically inverted change to org billing, and a `loadUsers` refactor that reads like GPT wrote it on autopilot. The fix only fully works for Google Calendar since Lark and Office365 were never updated to use the new `credentialId` parameter. This needed at least one more review pass before merging.
+
+---
+
+### CRITICAL: Logic Bugs That Will Bite You in Production
+
+#### 1. Tautological Dead Code in Google CalendarService
+
+**File:** `packages/app-store/googlecalendar/lib/CalendarService.ts`
+
+In both `updateEvent` and `deleteEvent`:
+
+```typescript
+const selectedCalendar = externalCalendarId
+  ? externalCalendarId
+  : event.destinationCalendar?.find((cal) => cal.externalId === externalCalendarId)?.externalId;
+```
+
+If `externalCalendarId` is falsy, we enter the else branch and search for a calendar whose `externalId === externalCalendarId` -- i.e., whose `externalId` equals a falsy value. This `.find()` is dead code. It will virtually never match. Calendar updates and deletes will silently target the wrong calendar or no calendar when `externalCalendarId` is not provided.
+
+What was almost certainly intended:
+
+```typescript
+const selectedCalendar = externalCalendarId
+  ? externalCalendarId
+  : event.destinationCalendar?.find((cal) => cal.credentialId === this.credential.id)?.externalId;
+```
+
+#### 2. Guaranteed Runtime Crash in EventManager.ts
+
+**File:** `packages/core/EventManager.ts`, ~line 117
+
+```typescript
+const [mainHostDestinationCalendar] = evt.destinationCalendar ?? [];
+if (evt.location === MeetLocationType && mainHostDestinationCalendar.integration !== "google_calendar") {
+```
+
+If `destinationCalendar` is `null`, `undefined`, or empty, `mainHostDestinationCalendar` is `undefined`. Accessing `.integration` on `undefined` throws `TypeError`. Needs optional chaining: `mainHostDestinationCalendar?.integration`.
+
+---
+
+### HIGH: Duplicated Credential-Fetching Code
+
+The credential fallback pattern (check in-memory, then fetch from DB) is copy-pasted verbatim in **three places**:
+- `EventManager.ts` -- `createAllCalendarEvents` (~15 lines)
+- `EventManager.ts` -- `updateAllCalendarEvents` (~15 lines, identical)
+- `handleCancelBooking.ts` (slightly different shape -- doesn't include `app` relation)
+
+When the credential schema changes, someone will update one and forget the others. This should be a single `resolveCredential()` utility.
+
+---
+
+### HIGH: Inconsistent Calendar Interface -- Fix Only Works for Google
+
+The `Calendar` interface was changed to require `credentialId: number` in `createEvent`, but only Google Calendar actually uses it. Lark and Office365 still destructure `[0]` from the array (main host only). **The bug this PR claims to fix is only actually fixed for Google Calendar.**
+
+The `credentialId` approach itself is questionable -- each CalendarService already has access to its own credential via `this.credential` or equivalent. Threading it through the interface forces every provider to accept a parameter they shouldn't need.
+
+---
+
+### HIGH: The `organizations/create.handler.ts` Change Is Logically Inverted and Unrelated
+
+```typescript
+// Before: if billing DISABLED, set slug directly; if ENABLED, set requestedSlug
+...(!IS_TEAM_BILLING_ENABLED && { slug }),
+...(IS_TEAM_BILLING_ENABLED && { requestedSlug: slug }),
+
+// After: if billing ENABLED, set BOTH slug AND requestedSlug; if DISABLED, set NEITHER
+...(IS_TEAM_BILLING_ENABLED ? { slug } : {}),
+...(IS_TEAM_BILLING_ENABLED ? { requestedSlug: slug } : {}),
+```
+
+The condition for `slug` is inverted. This is a semantic change that looks like a bug. And it has **nothing to do with destination calendars** -- violates atomic commit principles.
+
+---
+
+### MEDIUM: Inconsistent `null` vs `[]` for Empty Destination Calendars
+
+Most callsites use `[]` for empty, but `handleNewBooking.ts` uses `null`. Downstream code checks both `event.destinationCalendar` (truthy) and `.length > 0`. An empty array passes truthy but fails length; `null` fails truthy. This divergence causes subtle, hard-to-reproduce bugs. Pick one convention and enforce it everywhere.
+
+---
+
+### MEDIUM: The `loadUsers` Refactor Is Unnecessary Complexity
+
+**File:** `packages/features/bookings/lib/handleNewBooking.ts`
+
+The original clean ternary was replaced with 30 lines of defensive theater:
+1. `if (!Array.isArray(hosts))` is dead code -- `hosts` is always `eventType.hosts || []`
+2. The function throws errors inside a try/catch that swallows them into generic `"Unable to load users"`
+3. **The `organization` select was silently removed** from the Prisma query -- potential silent regression
+4. Completely unrelated to destination calendars
+
+---
+
+### MEDIUM: Magic Strings Replace Enum References
+
+```typescript
+// Before (type-safe):
+eventType.schedulingType === SchedulingType.COLLECTIVE
+
+// After (magic string):
+["COLLECTIVE", "ROUND_ROBIN"].includes(eventType.schedulingType)
+```
+
+Loses type safety and IDE refactoring support. Later in the same file, `"COLLECTIVE"` is used as a bare string while the enum is also imported. Pick one.
+
+---
+
+### Prioritized Recommendations
+
+**Must Fix:**
+1. The tautological `.find()` calls in Google CalendarService `updateEvent`/`deleteEvent`
+2. The null safety crash in EventManager.ts (`mainHostDestinationCalendar.integration`)
+3. The `organizations/create.handler.ts` logic inversion -- revert or separate PR
+
+**Should Fix:**
+4. Extract credential-fetching into a shared utility
+5. Make Lark and Office365 actually work for collective events
+6. Standardize `[]` vs `null` for empty destination calendars
+7. Revert the `loadUsers` refactor (adds complexity, removes `organization` select)
+
+**Cleanup:**
+8. Fix `calenderExternalId` typo (survived untouched while other typos were fixed)
+9. Remove restating comments ("Find in calEventRaw.destinationCalendar...")
+10. Revert `isTeamEventType` to use enum instead of magic strings
+11. Move unrelated drive-by fixes into their own commits

@@ -1,0 +1,40 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": false,
+      "confidence": 0.95,
+      "evidence": "",
+      "reasoning": "The review does not mention case sensitivity, email blacklisting, or any bypass related to case-insensitive email comparison; the closest email-related findings are about authorization logic, duplicate schemas, and attendee permissions, none of which address the blacklist bypass."
+    },
+    {
+      "bug_idx": 1,
+      "match": true,
+      "confidence": 0.99,
+      "evidence": "This uses `&&` (AND) \u2014 meaning you must be **both** admin AND owner. That's almost certainly wrong; it should be `||` (OR). As written, admins who aren't owners get rejected.",
+      "reasoning": "The review explicitly identifies the AND vs OR logic bug in the team admin/owner permission check, matching the golden bug exactly."
+    },
+    {
+      "bug_idx": 3,
+      "match": true,
+      "confidence": 0.75,
+      "evidence": "Duplicate validation schema \u2014 the server schema doesn't check uniqueness, the client schema does. Pick one source of truth.",
+      "reasoning": "The review identifies that the server-side schema lacks uniqueness validation while only the client enforces it, which is the same root cause as the golden bug: the backend's uniqueGuests filtering does not deduplicate within the input, allowing createMany to insert duplicate attendee rows."
+    },
+    {
+      "bug_idx": 2,
+      "match": false,
+      "confidence": 0.8,
+      "evidence": "",
+      "reasoning": "The review's point #7 questions whether emails survive the formatCalEvent transformation, which is a different concern than the golden bug's issue that the caller passes the original guest list (including existing attendees) to the email sender, causing existing attendees to be incorrectly treated as new guests in notifications."
+    },
+    {
+      "bug_idx": 4,
+      "match": true,
+      "confidence": 0.6,
+      "evidence": "`multiEmailValue` initialized with `[\"\\\"\\\"']` not `[]` in the dialog. That means the dialog opens with one empty input field, which is fine UX-wise, but then `handleAdd` checks `multiEmailValue.length === 0` which will never be true given this initial state.",
+      "reasoning": "The review identifies the same root cause \u2014 initializing with [\"\"] instead of [] \u2014 but frames the consequence differently: unreachable length check rather than validation issues, so it's a partial match on the defect with a different diagnosis of impact."
+    }
+  ],
+  "bugs": 5
+}

@@ -1,0 +1,19 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.98,
+      "evidence": "forEach with async callbacks \u2014 promises silently dropped. Multiple call sites use forEach with async delete functions, meaning those promises are never awaited and failures are silently swallowed. ... forEach doesn't await async callbacks. These are fire-and-forget. Same pattern in handleCancelBooking.ts and bookings.tsx.",
+      "reasoning": "The review explicitly identifies the same root cause: deleteScheduledEmailReminder and deleteScheduledSMSReminder called without await inside forEach loops, resulting in unreliable cancellation of scheduled reminders."
+    },
+    {
+      "bug_idx": 1,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "when immediateDelete is true, the function cancels via SendGrid and *returns early* without updating or deleting the DB record. So who cleans that up? ... Make immediateDelete path in deleteScheduledEmailReminder also handle DB cleanup \u2014 right now it silently orphans records",
+      "reasoning": "The review explicitly identifies that the immediateDelete=true path cancels via SendGrid but does not delete or update the DB record, creating orphaned records \u2014 the exact same defect described in the golden bug."
+    }
+  ],
+  "bugs": 2
+}

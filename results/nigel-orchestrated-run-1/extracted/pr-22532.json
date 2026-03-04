@@ -1,0 +1,14 @@
+{
+  "issues": [
+    "Passing an empty object `{}` to `updateManyByCredentialId` means Prisma's `@updatedAt` decorator never fires, so the cache timestamp that the entire feature depends on is never actually written. Must pass `{ updatedAt: new Date() }` instead.",
+    "`deleteCache.handler.ts` calls `prisma.calendarCache.deleteMany` directly instead of using the existing `CalendarCacheRepository.deleteManyByCredential` method, bypassing the repository pattern and its mock implementation used when calendar caching is disabled.",
+    "The `deleteCacheMutation` shows a success toast but never invalidates the `connectedCalendars` query, so the UI continues displaying the old `cacheUpdatedAt` timestamp until a manual page refresh. It should add `connectedCalendars.invalidate()` in `onSettled`.",
+    "The PR includes `scripts/test-gcal-webhooks.sh` (a 79-line developer tooling script for Tunnelmole tunnels) and a `ts-node` to `npx tsx` change in `package.json`, neither of which are related to the calendar cache status feature and should be in separate PRs.",
+    "In `deleteCache.handler.ts`, the credential-not-found check throws a generic `Error` instead of a `TRPCError` with an appropriate code like `NOT_FOUND` or `FORBIDDEN`, causing it to surface as a misleading 500 `INTERNAL_SERVER_ERROR` to the client.",
+    "The `connectedCalendars` handler fires a `groupBy` query against `CalendarCache` for every connected calendar regardless of type, even though only Google Calendar uses `cacheUpdatedAt`. It should filter to Google Calendar credential IDs or short-circuit to avoid unnecessary queries.",
+    "The `Intl.DateTimeFormat` in `CredentialActionsDropdown.tsx` is hardcoded to `\"en-US\"` locale instead of using the user's locale from `useLocale()`, so non-English users will see American-formatted dates alongside their localized text.",
+    "`CredentialActionsDropdown.tsx` uses hardcoded Tailwind color classes like `text-gray-900` and `text-gray-500` instead of the codebase's semantic tokens (`text-default`, `text-subtle`, `text-emphasis`), bypassing the theming system.",
+    "The `UserWithCalendars` type in `getConnectedDestinationCalendars.ts` was widened to include `googleChannelId`, which is not used anywhere in the cache status display flow \u2014 an unnecessary speculative type change.",
+    "The auto-generated Prisma warning comment in the migration file says the column was added without a default value, but the actual SQL includes `DEFAULT NOW()`, making the comment misleading."
+  ]
+}

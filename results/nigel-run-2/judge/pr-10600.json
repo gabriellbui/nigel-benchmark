@@ -1,0 +1,33 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "The file is `BackupCode.tsx`, the export is `default`, but the function is named `TwoFactor`. This is confusing when debugging \u2014 stack traces and React DevTools will show `TwoFactor` for two different components. Name it `BackupCode`.",
+      "reasoning": "The review explicitly identifies the same defect: the exported function in BackupCode.tsx is named TwoFactor, which is inconsistent naming."
+    },
+    {
+      "bug_idx": 2,
+      "match": false,
+      "confidence": 0.95,
+      "evidence": "",
+      "reasoning": "The review mentions indexOf() in the context of duplicated logic and null sentinels but never identifies the case-sensitivity problem \u2014 it does not flag that indexOf() performs a case-sensitive comparison causing uppercase hex backup codes to fail validation."
+    },
+    {
+      "bug_idx": 1,
+      "match": false,
+      "confidence": 0.95,
+      "evidence": "",
+      "reasoning": "The review discusses the disable endpoint multiple times (issues #2, #5, #11) but never identifies the specific defect that an error message in the disable endpoint incorrectly references 'backup code login' instead of something appropriate for a disable context."
+    },
+    {
+      "bug_idx": 3,
+      "match": false,
+      "confidence": 0.85,
+      "evidence": "",
+      "reasoning": "The golden bug describes a TOCTOU race condition where two concurrent login requests can both use the same backup code because decryption and mutation happen in memory before write-back; the review's closest issue (#2) discusses lack of transactional guarantee in the *disable* flow causing a used code to remain valid after partial failure, which is a different failure mode (crash recovery) in a different endpoint, not the concurrency/double-use race condition in the login flow."
+    }
+  ],
+  "bugs": 4
+}

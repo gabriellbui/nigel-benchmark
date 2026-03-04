@@ -1,0 +1,154 @@
+## Verdict: This needs work.
+
+The idea is sound — centralizing OAuth token refresh behind a shared abstraction and adding a credential sync webhook for self-hosters. But the execution has several issues that range from "this will bite you in production" to "this is misleading nonsense."
+
+---
+
+### Security Issues (Must Fix)
+
+**1. Timing-attack vulnerable secret comparison**
+`apps/web/pages/api/webhook/app-credential.ts:24-27`
+
+```ts
+req.headers[process.env.CALCOM_WEBHOOK_HEADER_NAME || "calcom-webhook-secret"] !==
+  process.env.CALCOM_WEBHOOK_SECRET
+```
+
+String `!==` comparison for webhook secrets is vulnerable to timing attacks. Use `crypto.timingSafeEqual` or a constant-time comparison. This is a webhook endpoint accepting credential data — get this right.
+
+**2. Decrypting with an empty string fallback**
+`apps/web/pages/api/webhook/app-credential.ts:55-57`
+
+```ts
+symmetricDecrypt(reqBody.keys, process.env.CALCOM_APP_CREDENTIAL_ENCRYPTION_KEY || "")
+```
+
+If the env var is missing, you pass an empty string as the decryption key. This will either throw a cryptic error from the crypto library or, worse, silently produce garbage. Fail explicitly. The `APP_CREDENTIAL_SHARING_ENABLED` check above should theoretically prevent this, but defense in depth matters when you're handling encrypted credentials.
+
+**3. No request method check on the webhook**
+`apps/web/pages/api/webhook/app-credential.ts:17`
+
+The handler doesn't verify `req.method === "POST"`. A GET request with query params could behave unpredictably with `req.body` parsing.
+
+**4. User ID in response leaks information**
+`apps/web/pages/api/webhook/app-credential.ts:79,87`
+
+```ts
+return res.status(200).json({ message: `Credentials updated for userId: ${reqBody.userId}` });
+```
+
+Don't echo back internal user IDs in API responses. A simple `{ message: "ok" }` is sufficient.
+
+---
+
+### Design Issues (Must Fix)
+
+**5. `parseRefreshTokenResponse` is fundamentally broken**
+`packages/app-store/_utils/oauth/parseRefreshTokenResponse.ts:7-10`
+
+```ts
+const minimumTokenResponseSchema = z.object({
+  access_token: z.string(),
+  [z.string().toString()]: z.number(),
+  [z.string().optional().toString()]: z.unknown().optional(),
+});
+```
+
+This is not how Zod works. `z.string().toString()` produces a string representation of the Zod type definition, not a dynamic property key matcher. This schema does nothing useful beyond checking `access_token` exists. The computed property keys evaluate to static strings like `"ZodString"` — they don't create catch-all property matchers. If the intent was to allow arbitrary additional properties, use `z.object({ access_token: z.string() }).passthrough()`. This is the kind of code that looks like someone asked an AI to write a Zod schema and nobody actually tested it.
+
+**6. Phantom refresh token injection**
+`packages/app-store/_utils/oauth/parseRefreshTokenResponse.ts:24-26`
+
+```ts
+if (!refreshTokenResponse.data.refresh_token) {
+  refreshTokenResponse.data.refresh_token = "refresh_token";
+}
+```
+
+You're mutating the parsed result to inject a literal string `"refresh_token"` as the refresh token value when one isn't present. This is a magic string that will silently pass validation but fail at runtime when any OAuth provider actually tries to use it. If the credential sync endpoint doesn't return refresh tokens, handle that explicitly in the callers rather than papering over it with a fake value.
+
+**7. `parseRefreshTokenResponse` return type is inconsistent**
+The function returns a `SafeParseReturnType` (the result of `.safeParse()`), but then the callers use it inconsistently:
+
+- `GoogleCalendarService.ts:96`: Uses `parseRefreshTokenResponse(googleCredentials, googleCredentialSchema)` and passes the result directly to `prisma.credential.update` — expecting a plain object, not a `{ success, data }` wrapper.
+- `Office365CalendarService.ts:261`: Accesses `tokenResponse.success` and `tokenResponse.data` — correct for the SafeParse return type.
+- `SalesforceCalendarService.ts:91`: Checks `accessTokenParsed.success` — correct.
+- `ZoomVideoApiAdapter.ts:101`: Uses the result without checking `.success` first.
+
+The Google Calendar usage looks like it will store `{ success: true, data: {...} }` as the credential key in the database. That's a data corruption bug.
+
+**8. `refreshOAuthTokens` has an inconsistent return type**
+`packages/app-store/_utils/oauth/refreshOAuthTokens.ts`
+
+When `APP_CREDENTIAL_SHARING_ENABLED` is true, it returns a `fetch` `Response` object. When false, it returns whatever `refreshFunction()` returns — which varies wildly across callers (Google returns `GaxiosResponse`, HubSpot returns a `TokenResponseIF`, Lark returns a `Response`, etc.). The callers then proceed to call methods like `.json()` or access `.data` on the result, assuming a specific type. This function promises type uniformity but delivers type chaos.
+
+For example, `HubspotCalendarService.ts:186` types the result as `HubspotToken`, but when credential sharing is enabled, it gets a raw `Response` object instead. That's a runtime crash waiting to happen.
+
+---
+
+### Abstraction Issues (Should Fix)
+
+**9. Half-committed refactor pattern**
+The `refreshOAuthTokens` wrapper adds a layer of indirection but doesn't actually abstract anything meaningful. Every caller still has to:
+- Construct their own refresh request
+- Parse the response differently
+- Handle errors differently
+- Update credentials differently
+
+All the wrapper does is optionally redirect to a different endpoint. A proper abstraction would handle the full refresh-parse-persist cycle, not just the "which endpoint to call" decision.
+
+**10. File reorganization creates unnecessary churn**
+Moving `encodeOAuthState`, `decodeOAuthState`, and `createOAuthAppCredential` into an `oauth/` subdirectory touches ~20 files for zero functional benefit. These files were already in `_utils` which is already the OAuth utils directory. If you're going to reorganize, at least create a barrel export (`oauth/index.ts`) so consumers have a clean import path.
+
+---
+
+### Nits
+
+**11. Empty JSDoc comment**
+`apps/web/pages/api/webhook/app-credential.ts:16`
+```ts
+/** */
+```
+Delete this. An empty doc comment is worse than no comment.
+
+**12. Commented-out indentation in webhook handler**
+`apps/web/pages/api/webhook/app-credential.ts:48`
+```ts
+//   Search for the app's slug and type
+```
+The extra indentation on this comment suggests it was copy-pasted from somewhere with different formatting. Minor, but sloppy.
+
+**13. Zoho Bigin hardcoded slug**
+`packages/app-store/zoho-bigin/api/add.ts:17`
+```ts
+const redirectUri = WEBAPP_URL + `/api/integrations/zoho-bigin/callback`;
+```
+Changed from `appConfig.slug` to a hardcoded string. This goes in the wrong direction — you had a dynamic reference and replaced it with a magic string.
+
+**14. `APP_CREDENTIAL_SHARING_ENABLED` is truthy-based, not boolean**
+`packages/lib/constants.ts:103`
+```ts
+export const APP_CREDENTIAL_SHARING_ENABLED =
+  process.env.CALCOM_WEBHOOK_SECRET && process.env.CALCOM_APP_CREDENTIAL_ENCRYPTION_KEY;
+```
+This evaluates to either `undefined` or the value of `CALCOM_APP_CREDENTIAL_ENCRYPTION_KEY` (a string), not a boolean. Wrap it in `Boolean()` or use `!!`. Using the encryption key value as a truthy flag is confusing.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix before merge:**
+1. Use constant-time comparison for webhook secret (#1)
+2. Fix `parseRefreshTokenResponse` — the Zod schema is nonsensical (#5)
+3. Fix the return type inconsistency causing data corruption in Google Calendar (#7)
+4. Fix `refreshOAuthTokens` return type inconsistency across callers (#8)
+5. Remove the fake `"refresh_token"` injection (#6)
+6. Add method check and remove userId from responses in webhook (#3, #4)
+
+**Should fix:**
+7. Fail explicitly on missing encryption key (#2)
+8. Consider a more complete abstraction for the refresh cycle (#9)
+9. Make `APP_CREDENTIAL_SHARING_ENABLED` an actual boolean (#14)
+
+**Nitpicks:**
+10. Clean up empty JSDoc, comment indentation, hardcoded slug (#11, #12, #13)

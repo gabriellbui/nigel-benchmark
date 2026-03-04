@@ -1,0 +1,122 @@
+## Overall Assessment: This needs work.
+
+The intent is sound — consolidating reminder cleanup into the delete functions themselves instead of scattering Prisma delete calls across every call site. That's a good instinct. But the execution has several issues that would keep me up at night.
+
+---
+
+### Design Issues
+
+**1. Inconsistent deletion strategies between email and SMS**
+
+`emailReminderManager.ts` and `smsReminderManager.ts` now have fundamentally different behaviors hiding behind similar function signatures:
+
+- `deleteScheduledEmailReminder` has three code paths: no `referenceId` → delete DB record; `immediateDelete` → cancel via SendGrid only (no DB cleanup!); default → mark `cancelled: true` in DB
+- `deleteScheduledSMSReminder` always cancels via Twilio (if `referenceId` exists) AND deletes the DB record
+
+Why does cancelling an email with `immediateDelete: true` skip the DB deletion? That's a leaked record waiting to happen. Every caller passing `immediateDelete: true` is now relying on the cron job in `scheduleEmailReminders.ts` to clean up, but that cron only picks up records with `cancelled: true` — and `immediateDelete` never sets that flag. **This is a bug.** Reminders cancelled with `immediateDelete: true` from workflow/step deletion will have their SendGrid batch cancelled but the `WorkflowReminder` row will persist forever.
+
+**2. The `cancelled` column is a leaky abstraction**
+
+`cancelled: Boolean?` — nullable boolean on a model that already has a `scheduled` boolean. So now a reminder can be `scheduled: true, cancelled: null`, `scheduled: true, cancelled: true`, `scheduled: false, cancelled: null`... the state matrix is getting out of hand. This should either be an enum/status field or `cancelled` should be non-nullable with a default of `false`.
+
+```sql
+ALTER TABLE "WorkflowReminder" ADD COLUMN "cancelled" BOOLEAN;
+```
+
+No default value. Every existing row gets `NULL`. The query in the cron filters `cancelled: true`, so existing rows are fine, but new code that checks truthiness of `cancelled` in JS will treat `null` and `false` differently depending on context. Use `DEFAULT false` and make it non-nullable.
+
+**3. Fire-and-forget async in `forEach`**
+
+`packages/trpc/server/routers/viewer/workflows.tsx` around the edited step reminders:
+
+```typescript
+remindersToUpdate.forEach(async (reminder) => {
+  if (reminder.method === WorkflowMethods.EMAIL) {
+    deleteScheduledEmailReminder(reminder.id, reminder.referenceId);
+  } else if (reminder.method === WorkflowMethods.SMS) {
+    deleteScheduledSMSReminder(reminder.id, reminder.referenceId);
+  }
+});
+```
+
+`forEach` with `async` callbacks doesn't await anything. These promises are floating. If any of them fail, you'll get unhandled promise rejections. The old code had the same issue with the external API calls but at least batched the DB operations with `Promise.all`. Now the DB operations are inside the fire-and-forget too, so you can silently fail to clean up reminder records.
+
+This pattern appears in multiple places across the diff — `handleCancelBooking.ts`, `bookings.tsx`, `workflows.tsx`. None of the `forEach` loops await the delete calls.
+
+**4. Removed authorization check in workflow update**
+
+Old code:
+```typescript
+const deleteReminder = ctx.prisma.workflowReminder.deleteMany({
+  where: {
+    id: reminder.id,
+    booking: {
+      userId: ctx.user.id,
+    },
+  },
+});
+```
+
+New code delegates deletion to `deleteScheduledEmailReminder`/`deleteScheduledSMSReminder`, which delete by `id` alone — no `userId` check. The authorization boundary that ensured a user could only delete their own reminders is gone. The upstream query may scope things correctly, but you've moved from defense-in-depth to hoping the caller got it right.
+
+---
+
+### Error Handling
+
+**5. Swallowed errors everywhere**
+
+`handleNewBooking.ts`:
+```typescript
+try {
+  originalRescheduledBooking.workflowReminders.forEach((reminder) => {
+    // ...async calls not awaited
+  });
+} catch (error) {
+  log.error("Error while canceling scheduled workflow reminders", error);
+}
+```
+
+The `try/catch` here catches nothing meaningful — `forEach` with async callbacks won't throw into this block. The actual errors will be unhandled. This is feel-good error handling.
+
+`scheduleEmailReminders.ts`:
+```typescript
+} catch (error) {
+  console.log(`Error cancelling scheduled Emails: ${error}`);
+}
+```
+
+`console.log` for a production error in a cron job. If the SendGrid cancel call fails midway through the loop, you've cancelled some reminders but not others, and you've deleted none of the DB records (since the `Promise.all` for deletes comes after the loop). Partial failure with no recovery path.
+
+---
+
+### UI Change
+
+**6. Sender ID support silently dropped**
+
+The `WorkflowStepContainer.tsx` change replaces `(isPhoneNumberNeeded || isSenderIdNeeded)` with just `isPhoneNumberNeeded`. The entire sender ID UI path is gone. If this is intentional, it deserves a comment or at least mention in the PR description. If it's accidental, it's a regression.
+
+---
+
+### Indentation Mess
+
+The bottom chunk of `workflows.tsx` has 60+ lines that look like they just got their indentation stripped. This is either a merge artifact or someone's editor mangled the file. Either way, this shouldn't ship — it makes the code harder to read and will cause unnecessary merge conflicts.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix:**
+1. `immediateDelete: true` path in `deleteScheduledEmailReminder` doesn't clean up the DB record — orphaned rows
+2. Add `DEFAULT false NOT NULL` to the `cancelled` column migration
+3. Replace `forEach` + async with `Promise.all` + `map` everywhere reminder deletions happen — you're silently dropping errors and creating race conditions
+4. Restore the `userId` authorization check on reminder deletion, or document why it's safe to remove
+
+**Should fix:**
+5. Unify the email/SMS deletion strategies — they should have the same contract around DB cleanup
+6. The try/catch in `handleNewBooking.ts` is decorative; fix it or remove it
+7. Use proper logging (`log.error`) instead of `console.log` in production cron paths
+8. Fix the indentation disaster at the bottom of `workflows.tsx`
+
+**Nitpick:**
+9. The `isSenderIdNeeded` removal should be called out explicitly if intentional
+10. The function signature `(reminderId: number, referenceId: string | null, immediateDelete?: boolean)` is doing too much — three params controlling branching behavior is a code smell. Consider separate functions or an options object.

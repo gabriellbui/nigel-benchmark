@@ -1,0 +1,151 @@
+## Not terrible, but there are some real issues hiding in here.
+
+The feature itself is sound — backup codes for 2FA is table stakes for any serious auth system. But the implementation has security gaps, code duplication, and some questionable design choices that need addressing before this ships.
+
+---
+
+### Security Issues (Must Fix)
+
+**1. Backup codes generated at setup time, not enable time**
+
+`apps/web/pages/api/auth/two-factor/totp/setup.ts`
+
+Backup codes are generated and stored when the user *sets up* 2FA (enters password), not when they *enable* it (enters valid TOTP code). If a user starts setup but never completes it, they've got backup codes sitting in the database attached to a non-enabled 2FA config. The codes should be generated and persisted only after TOTP verification succeeds in the enable step.
+
+**2. Backup codes returned in plaintext to the client during setup**
+
+```js
+return res.json({ secret, keyUri, dataUri, backupCodes });
+```
+
+The raw backup codes are sent back in the setup response before 2FA is even confirmed. If someone intercepts this response or it gets logged, those codes are compromised. Codes should only be revealed once, after successful enable.
+
+**3. Backup codes not invalidated on disable (login path)**
+
+In `next-auth-options.ts`, when a backup code is used to *log in*, the used code is set to `null` and the array is re-encrypted. Good. But in `totp/disable.ts`, when a backup code is used to *disable* 2FA, the code is verified but never invalidated before the handler continues:
+
+```js
+// we delete all stored backup codes at the end, no need to do this here
+```
+
+If the disable operation fails partway through (after backup code verification but before the final `prisma.update`), that backup code remains valid. Defensive coding would null it out immediately.
+
+**4. No rate limiting on backup code attempts**
+
+The TOTP disable endpoint and the login endpoint both allow unlimited backup code guesses. 10 codes × 10 hex characters = a large keyspace, but there's no brute-force protection here. The login path at least goes through NextAuth, but the disable endpoint is raw.
+
+---
+
+### Design Issues (Should Fix)
+
+**5. Duplicated backup code verification logic**
+
+The backup code validation logic (decrypt → parse JSON → indexOf → check) is copy-pasted between `totp/disable.ts` and `next-auth-options.ts`:
+
+```js
+// In both files:
+const backupCodes = JSON.parse(symmetricDecrypt(user.backupCodes, process.env.CALENDSO_ENCRYPTION_KEY));
+const index = backupCodes.indexOf(req.body.backupCode.replaceAll("-", ""));
+if (index === -1) { /* error */ }
+```
+
+This is begging for a shared utility like `verifyBackupCode(encryptedCodes, suppliedCode)` that returns the index or throws. When (not if) the verification logic needs to change, you'll have to hunt down every copy.
+
+**6. `null` sentinel values in the backup codes array**
+
+```js
+backupCodes[index] = null;
+```
+
+Using `null` to mark used codes means the array is a mix of `string | null`. This works but is fragile — any future code that iterates over backup codes needs to filter nulls. A cleaner approach: `splice` the used code out, or use a Set. At minimum, type the array properly (`(string | null)[]`).
+
+**7. `backupCodes` state is untyped**
+
+`apps/web/components/settings/EnableTwoFactorModal.tsx`:
+
+```js
+const [backupCodes, setBackupCodes] = useState([]);
+```
+
+No type annotation. TypeScript infers `never[]`, which means `backupCodes.map(formatBackupCode)` only works because of implicit `any` flowing through. Should be `useState<string[]>([])`.
+
+**8. Blob URL memory leak**
+
+```js
+if (backupCodesUrl) URL.revokeObjectURL(backupCodesUrl);
+setBackupCodesUrl(URL.createObjectURL(textBlob));
+```
+
+The revocation happens before setting the new URL, which is fine for re-setup. But there's no cleanup on component unmount. If the modal is closed without downloading, that blob URL leaks. Use a `useEffect` cleanup.
+
+---
+
+### Abstraction Problems
+
+**9. `BackupCode` component named like a data model, exported as default but function is named `TwoFactor`**
+
+`apps/web/components/auth/BackupCode.tsx`:
+
+```js
+export default function TwoFactor({ center = true }) {
+```
+
+The file is `BackupCode.tsx`, the export is default, but the function is named `TwoFactor`. This is going to confuse every developer who touches this. Name it `BackupCodeInput` or similar — something that distinguishes it from the TOTP `TwoFactor` component.
+
+**10. `formatBackupCode` defined inline, used in multiple contexts**
+
+The formatting function `(code) => \`${code.slice(0, 5)}-${code.slice(5, 10)}\`` is defined inside `EnableTwoFactorModal` but the same format is assumed in `BackupCode.tsx` (via the placeholder `XXXXX-XXXXX` and the `minLength`/`maxLength` constraints). This format should be a shared constant or utility.
+
+---
+
+### Minor / Nitpick
+
+**11. Nested ternary readability**
+
+`apps/web/pages/auth/login.tsx`:
+
+```jsx
+{twoFactorRequired ? !twoFactorLostAccess ? <TwoFactor center /> : <BackupCode center /> : null}
+```
+
+Nested ternaries without parens. This is a readability crime. At minimum, add parentheses or break it into an `if/else` block.
+
+**12. Test TODOs left in**
+
+```js
+// TODO: add more backup code tests, e.g. login + disabling 2fa with backup
+// TODO: check file content
+// TODO: check clipboard content
+```
+
+These are fine for a draft, but this PR shouldn't merge with critical test paths as TODOs. Login with backup codes and disable with backup codes are the core happy paths of this feature.
+
+**13. `FIXME` comment about a broken existing test assertion**
+
+```js
+// FIXME: this passes even when switch is not checked
+```
+
+This is a pre-existing bug being documented rather than fixed. Not a blocker for this PR, but don't let it rot.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix before merge:**
+1. Move backup code generation to the enable step, not setup
+2. Extract shared backup code verification utility
+3. Fix the function name in `BackupCode.tsx`
+4. Add rate limiting to backup code verification in the disable endpoint
+5. Type the `backupCodes` state properly
+
+**Should fix:**
+6. Clean up blob URL on unmount
+7. Fix the nested ternary
+8. Write actual tests for login/disable with backup codes (not just TODOs)
+
+**Nitpick:**
+9. Extract `formatBackupCode` to a shared util
+10. Consider `splice` over `null` sentinel for used codes
+
+The bones are here, but the security timing (generating codes too early) and the duplicated verification logic are the real concerns. Fix those and this is shippable.

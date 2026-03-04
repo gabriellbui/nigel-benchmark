@@ -1,0 +1,121 @@
+## This needs work.
+
+The feature itself is straightforward — add guests to an existing booking. But there are several design issues, a security bug, and some sloppy patterns that need addressing before this ships.
+
+---
+
+### Security Issues
+
+**1. Broken authorization logic — `&&` should be `||`**
+`addGuests.handler.ts:50-51`
+```ts
+const isTeamAdminOrOwner =
+    (await isTeamAdmin(user.id, booking.eventType?.teamId ?? 0)) &&
+    (await isTeamOwner(user.id, booking.eventType?.teamId ?? 0));
+```
+This requires someone to be **both** admin AND owner. That's almost certainly wrong — you want `||`. As written, a team admin who isn't the owner gets denied. The variable name literally says "AdminOrOwner" while the logic says "AdminAndOwner." This is the kind of bug that gets filed as a P1 at 3am.
+
+**2. Fallback to `teamId ?? 0` is dangerous**
+`addGuests.handler.ts:50-51`
+
+If `booking.eventType?.teamId` is null (personal bookings), you're passing `0` to `isTeamAdmin` and `isTeamOwner`. This silently queries for a team with ID 0, which probably returns false but is still a meaningless query. This should short-circuit when there's no team context.
+
+**3. No validation that the booking is in the future**
+`addGuests.handler.ts`
+
+You can add guests to a past booking. There's nothing preventing someone from adding guests to a booking that happened last week. The calendar update will still fire, emails will still send. At minimum, check `booking.startTime > new Date()`.
+
+**4. No limit on guest count**
+`addGuests.schema.ts`
+
+The schema accepts an unbounded array of emails. Someone could POST 10,000 email addresses and your handler will happily create 10,000 attendee records and fire 10,000 emails. Add a `.max()` to the array.
+
+---
+
+### Design Issues
+
+**5. Duplicate validation schema**
+`AddGuestsDialog.tsx:29-33`
+```ts
+const ZAddGuestsInputSchema = z.array(z.string().email()).refine((emails) => {
+    const uniqueEmails = new Set(emails);
+    return uniqueEmails.size === emails.length;
+});
+```
+You have a schema defined in `addGuests.schema.ts` and a *different* one in the dialog component. The server schema validates `{ bookingId, guests }`, the client schema validates just the email array with a uniqueness refinement the server doesn't have. Pick one source of truth. The uniqueness check should live on the server schema too, and the client should import from it or share the email validation shape.
+
+**6. Zod schema instantiated on every render**
+`AddGuestsDialog.tsx:29-33`
+
+The `ZAddGuestsInputSchema` is defined *inside* the component function body. Every render creates a new Zod schema object. Move it outside.
+
+**7. `["""]` as initial state is a code smell**
+`AddGuestsDialog.tsx:36`
+```ts
+const [multiEmailValue, setMultiEmailValue] = useState<string[]>([""]);
+```
+You initialize with `[""]` — an array containing one empty string — which means the empty string check in `handleAdd` (`multiEmailValue.length === 0`) will never trigger, because length is always at least 1. The validation still catches it via `.email()`, but the intent is muddy.
+
+**8. Organizer re-fetched unnecessarily**
+`addGuests.handler.ts:62-73`
+
+You already include `user` in the booking query (`include: { user: ... }`), but then you do a *second* query to fetch the organizer by `booking.userId`. You have `booking.user` right there.
+
+**9. Error message template is clunky**
+`AddGuestsDialog.tsx:46`
+```ts
+const message = `${err.data?.code}: ${t(err.message)}`;
+```
+Showing raw TRPC error codes like `BAD_REQUEST: Emails must be unique` to users is not a good UX pattern. The other dialogs in this codebase don't do this.
+
+---
+
+### Abstraction Issues
+
+**10. `MultiEmail` component ignores existing patterns**
+`packages/ui/form/MultiEmail.tsx`
+
+This is a brand new 96-line component. Does cal.com not already have a multi-input pattern somewhere? The booking form itself supports adding guests — is that component not reusable? If it genuinely needs to be new, it should at least follow the existing form component patterns (use `forwardRef`, consistent prop naming with other form components).
+
+Also, using array index as React key (`key={index}`) on a list where items can be spliced is a classic bug factory. Reordering or removing items will cause stale input state.
+
+**11. Lazy loading wrapper is suspicious**
+`MultiEmailLazy.tsx:4`
+```ts
+/** These are like 40kb that not every user needs */
+const MultiEmail = dynamic(() => import("./MultiEmail")) as unknown as typeof import("./MultiEmail").default;
+```
+The comment says "40kb" but `MultiEmail.tsx` is a 96-line component with no heavy dependencies — it just uses `EmailField`, `Button`, `Icon`, and `Tooltip`, all of which are already in the bundle. The `as unknown as` double-cast is also a red flag. This lazy wrapper adds complexity for no measurable gain.
+
+---
+
+### Minor Issues
+
+- `addGuests.handler.ts:171` — `console.log("Error sending AddGuestsEmails")` swallows the actual error. At least log `err`.
+- `addGuests.handler.ts:174` — Returning `{ message: "Guests added" }` as a hardcoded English string from an API endpoint in a localized app. The other handlers in this codebase likely return structured data.
+- `email-manager.ts:523` — Missing blank line before `sendAddGuestsEmails`. The rest of the file has blank lines between exports.
+- `BookingListItem.tsx:195` — The action ID is `"add_members"` but this feature is about adding *guests*. Naming inconsistency that will confuse anyone grepping later.
+- `addGuests.handler.ts:100` — Guest name is set to `""`. These attendees will show up as nameless in calendar invites and emails. Consider using the email prefix as a fallback.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix:**
+1. Fix the `&&` / `||` auth bug — this is a broken access control check
+2. Add booking time validation (future bookings only)
+3. Add guest array size limit to the schema
+4. Fix the `teamId ?? 0` fallback
+
+**Should fix:**
+5. Consolidate the duplicate Zod schemas
+6. Remove redundant organizer query
+7. Move Zod schema outside component body
+8. Use proper list keys instead of array indices
+9. Log the actual error, not just a string
+
+**Nitpicks:**
+10. Rename `add_members` to `add_guests`
+11. Remove the unnecessary lazy wrapper
+12. Add blank line in email-manager.ts
+13. Use email prefix as guest name fallback

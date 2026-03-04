@@ -1,0 +1,123 @@
+# Code Review: Advanced date override handling and timezone compatibility improvements
+
+**Overall Assessment: This needs work.** There are real bugs hiding in here, repeated dayjs constructions scattered everywhere, and the core availability check logic has been bolted on in a way that's going to bite someone hard at 2am when a user in UTC+13 can't book a slot.
+
+---
+
+## Critical Bugs
+
+### 1. Dead comparison with `===` on dayjs objects
+`packages/trpc/server/routers/viewer/slots.ts` — inside `checkIfIsAvailable`:
+
+```js
+if (dayjs(date.start).add(utcOffset, "minutes") === dayjs(date.end).add(utcOffset, "minutes")) {
+  return true;
+}
+```
+
+This will **never** be true. `===` on two different dayjs objects compares references, not values. You need `.isSame()`. This entire branch is dead code that silently does nothing — the kind of bug that passes every test and then fails silently in production.
+
+### 2. `start` and `end` are identical in working hours check
+
+```js
+const start = slotStartTime.hour() * 60 + slotStartTime.minute();
+const end = slotStartTime.hour() * 60 + slotStartTime.minute();
+if (start < workingHour.startTime || end > workingHour.endTime) {
+```
+
+`start` and `end` are computed from the exact same value (`slotStartTime`). The `end` should use `slotEndTime`. This means the working hours boundary check on the end side is completely wrong — a 60-minute event starting at 4:59pm will pass a 5pm end-of-day check.
+
+---
+
+## Design Issues
+
+### 3. Offset calculation is repeated and fragile
+`packages/lib/slots.ts`:
+
+```js
+const organizerUtcOffset = dayjs(override.start.toString()).tz(override.timeZone).utcOffset();
+const inviteeUtcOffset = dayjs(override.start.toString()).tz(timeZone).utcOffset();
+const offset = inviteeUtcOffset - organizerUtcOffset;
+```
+
+Then the same `dayjs(...).utc().add(offset, "minute")` pattern is repeated **four times** for `startTime` and `endTime`. Extract a helper. Something like:
+
+```js
+const adjustedStart = dayjs(override.start).utc().add(offset, "minute");
+const adjustedEnd = dayjs(override.end).utc().add(offset, "minute");
+```
+
+Two lines instead of four repeated constructions. Also — `.start.toString()` on a `Date` gives you implementation-dependent string formatting. Just pass the Date directly to dayjs.
+
+### 4. UTC offset calculation repeated differently in two files
+In `slots.ts`, offset is `inviteeUtcOffset - organizerUtcOffset`. In `slots.ts` (trpc), offset is `organizerUtcOffset * -1`. Two different approaches to the same conceptual problem in the same PR. Pick one pattern and centralize it, or the next person touching timezone logic will pick whichever file they find first and assume that's the canonical approach.
+
+### 5. `checkIfIsAvailable` is getting overloaded
+This function started as a simple busy-time checker. Now it's also checking date overrides AND working hours, with the signature ballooning to include `dateOverrides`, `workingHours`, `organizerTimeZone` — all optional with defaults. The function is doing three different things. These concerns should be separated or at least the date override / working hours logic should be extracted into named helpers that `checkIfIsAvailable` calls.
+
+### 6. Side-effectful `.find()` used as a conditional
+```js
+let dateOverrideExist = false;
+
+if (dateOverrides.find((date) => {
+    // ...
+    dateOverrideExist = true;
+    // ...
+})) {
+```
+
+Using `.find()` for its side effect of mutating a variable in outer scope, then also using its return value — this is hard to reason about. The `dateOverrideExist` flag is set to true inside the `.find()` callback but is checked *after* the `if` block. This works by accident because `.find()` is synchronous, but it's confusing. Split this into explicit steps: first check if an override exists for the day, then check if the slot falls within it.
+
+### 7. `timeZone` leaking into `TimeRange`
+`packages/types/schedule.d.ts` — adding `timeZone?: string` to `TimeRange` feels like it's solving the wrong problem. A time range is a time range. The timezone is context about who owns that range, not a property of the range itself. This couples timezone awareness into a type that was previously timezone-agnostic. Every consumer of `TimeRange` now has to wonder "should I care about this `timeZone` field?"
+
+---
+
+## Minor Issues
+
+### 8. Whitespace-only changes mixed in
+Removing blank lines between `return true;` and the closing brace, removing trailing blank lines — these aren't meaningful changes and they pollute the diff, making it harder to see what actually changed. Keep formatting changes in a separate commit.
+
+### 9. Comment style
+```js
+//check if date override for slot exists
+```
+```js
+//if no date override for slot exists check if it is within normal work hours
+```
+
+Missing space after `//`, no punctuation, reads like a stream of consciousness. These comments are fine in intent but sloppy in execution. If you're going to comment, make it count.
+
+### 10. `!!activeOverrides.length` 
+Not from this PR, but since you're touching this block — `!!array.length` is a JS anti-pattern. `array.length > 0` is clearer.
+
+---
+
+## What's Missing
+
+**No tests for the working hours check in `checkIfIsAvailable`.** The test added only covers date overrides with different timezones. The new working hours boundary logic (which has a bug — see #2) has zero test coverage.
+
+**No tests for edge cases around DST transitions.** If you're writing timezone offset code, you need tests that exercise DST boundaries. An override set during a DST transition will produce different offsets for the same wall-clock time, and nothing here accounts for that.
+
+---
+
+## Prioritized Recommendations
+
+**Must fix:**
+1. The `===` comparison on dayjs objects — this is a real bug
+2. The `start`/`end` copy-paste error in working hours check — this is a real bug
+3. Add test coverage for the working hours check path
+
+**Should fix:**
+4. Extract repeated dayjs offset calculations into variables/helpers
+5. Unify the offset calculation approach between the two files
+6. Refactor the side-effectful `.find()` into explicit, readable steps
+7. Reconsider putting `timeZone` on `TimeRange` — consider a wrapper type instead
+
+**Nitpicks:**
+8. Fix comment formatting (space after `//`)
+9. Separate whitespace changes from logic changes
+
+---
+
+The timezone work addresses a real problem, but the implementation has bugs that will silently produce wrong results, and the overall approach spreads timezone logic across multiple files with no shared abstraction. Fix the bugs, add the missing tests, and consolidate the offset math before merging.

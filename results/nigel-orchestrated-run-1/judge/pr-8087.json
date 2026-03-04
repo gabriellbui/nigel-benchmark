@@ -1,0 +1,19 @@
+{
+  "matches": [
+    {
+      "bug_idx": 1,
+      "match": true,
+      "confidence": 0.99,
+      "evidence": "Array.forEach does not await the return value of its callback. Every one of these async callbacks becomes fire-and-forget. The try/catch wrapping the forEach will never catch errors from these callbacks because the promises are unhandled. Impact: Calendar events may fail to delete silently. Video meetings may fail to clean up. Replace every forEach(async ...) with for...of or Promise.all(arr.map(...))",
+      "reasoning": "The review explicitly identifies the async forEach fire-and-forget pattern causing unawaited promises, unhandled rejections, silent failures in calendar/video cleanup, and ineffective try-catch blocks, matching the golden bug exactly."
+    },
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.95,
+      "evidence": "Missing Error Handling on Dynamic Imports \u2014 None of the `await appStore[...]` calls handle import failures. Dynamic imports can fail at runtime per-request (syntax error, missing dependency, network issue in edge runtime). This is a reliability regression.",
+      "reasoning": "The review explicitly identifies the same defect: missing error handling (try-catch) around awaited dynamic imports, matching the golden bug's call for graceful handling of import failures."
+    }
+  ],
+  "bugs": 2
+}

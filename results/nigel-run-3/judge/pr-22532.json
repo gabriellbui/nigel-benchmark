@@ -1,0 +1,19 @@
+{
+  "matches": [
+    {
+      "bug_idx": 1,
+      "match": false,
+      "confidence": 0.95,
+      "evidence": "",
+      "reasoning": "The review does not mention any issues with sed syntax, macOS/Linux compatibility, or the -i flag behavior differences across platforms."
+    },
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.65,
+      "evidence": "You're passing an empty data object to updateMany to trigger Prisma's implicit updatedAt behavior... you're relying on Prisma's @updatedAt directive to auto-touch the timestamp. If someone removes @updatedAt from the schema, this silently breaks. A more explicit { updatedAt: new Date() } would make the intent unmistakable.",
+      "reasoning": "The review identifies the same problematic code (empty object passed to updateManyByCredentialId) and the same fix (explicitly set updatedAt), but frames it as fragile implicit behavior rather than recognizing it is currently broken \u2014 a slightly different diagnosis of the same defect, warranting moderate confidence."
+    }
+  ],
+  "bugs": 2
+}

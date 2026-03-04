@@ -1,0 +1,14 @@
+{
+  "issues": [
+    "getBaseConditions() has dead code branches: buildAuthorizationConditions always returns a Prisma.Sql (never null), so the filterConditions-only and final else branches are unreachable. Only two of four branches can ever execute.",
+    "buildTeamAuthorizationCondition silently drops the OR clause for user bookings when userIdsFromTeam is empty, changing behavior from the old code which always included both OR branches. This is a potential regression in authorization logic.",
+    "buildOrgAuthorizationCondition has the same silent behavior change as the team authorization \u2014 empty array conditionally drops a clause without explicit documentation, which is dangerous in authorization logic.",
+    "InsightsBookingServicePublicOptions weakens type safety by replacing the discriminated union with a loose type where teamId is optional even when scope is 'team', allowing invalid states that TypeScript won't catch.",
+    "Removing findMany and replacing it with getBaseConditions() that returns a raw SQL fragment pushes SQL construction concerns (table names, raw SQL interpolation) to every caller, creating a maintenance hazard and ergonomic regression.",
+    "The reduce pattern for joining SQL conditions with AND/OR is duplicated three times across buildFilterConditions, buildOrgAuthorizationCondition, and buildTeamAuthorizationCondition. This should be extracted into a joinSql helper to prevent divergence bugs.",
+    "Prisma.sql with ANY(${array}) may not correctly serialize arrays for PostgreSQL's = ANY() syntax. This is a runtime risk that no type checker will catch, and behavior with non-Postgres engines is undefined.",
+    "Caching tests were deleted but the caching mechanism (cachedAuthConditions, cachedFilterConditions) still exists in the implementation. Either restore the tests or remove the caching code.",
+    "Test assertions comparing Prisma.Sql template objects with toEqual are fragile because they depend on Prisma.Sql's internal structure, which could change on a Prisma upgrade. Integration-style assertions (run query, check results) would be more durable.",
+    "The isOrgOwnerOrAdmin change from array includes to direct equality checks is a drive-by refactor unrelated to the PR's purpose and should be a separate atomic commit."
+  ]
+}

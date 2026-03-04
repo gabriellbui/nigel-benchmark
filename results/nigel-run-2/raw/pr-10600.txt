@@ -1,0 +1,150 @@
+## Not Terrible, But Has Some Real Problems
+
+This PR adds backup codes for 2FA — a genuinely important security feature. The overall flow (generate on setup, display/download/copy, use for login and disable) is reasonable. But there are several issues that range from "this will bite you in production" to "this is just sloppy."
+
+---
+
+### Security Issues (Must Fix)
+
+**1. Backup codes stored before 2FA is actually enabled**
+
+`apps/web/pages/api/auth/two-factor/totp/setup.ts`
+
+Backup codes are generated and persisted to the database during the *setup* step — before the user has confirmed the TOTP code and actually enabled 2FA. If a user starts setup but never completes it, they now have backup codes sitting in the database tied to a `twoFactorEnabled: false` account. These codes are also sent to the client at this point, meaning they're exposed before 2FA is even active.
+
+Backup codes should be generated and stored only *after* the TOTP code is verified in the enable step, not during setup.
+
+**2. Backup codes not invalidated after use during disable**
+
+`apps/web/pages/api/auth/two-factor/totp/disable.ts:62-64`
+
+```
+// we delete all stored backup codes at the end, no need to do this here
+```
+
+This comment is technically true — `backupCodes` is set to `null` at the end. But between the backup code check and the database update, there's no transactional guarantee. If the request fails partway through, the used backup code is still valid. The login flow correctly removes the used code immediately; the disable flow does not. Inconsistent security behavior across two endpoints handling the same credential type.
+
+**3. Backup codes sent in plaintext in the setup API response**
+
+`apps/web/pages/api/auth/two-factor/totp/setup.ts:79`
+
+```js
+return res.json({ secret, keyUri, dataUri, backupCodes });
+```
+
+The codes are generated, encrypted for storage, then sent back in plaintext. This means they travel over the wire and live in browser memory. This is somewhat unavoidable for display purposes, but the fact that they're generated *before* 2FA is enabled (see issue #1) makes this worse — you're exposing backup codes for a security feature that isn't active yet.
+
+**4. No rate limiting on backup code attempts**
+
+The login flow (`next-auth-options.ts`) and disable flow (`disable.ts`) both check backup codes against the stored list, but neither has rate limiting specific to backup code attempts. Backup codes are 10 hex characters — that's 16^10 possibilities, so brute force isn't practical, but it's still good practice to rate-limit these separately from normal login attempts.
+
+---
+
+### Design Issues (Should Fix)
+
+**5. Duplicated backup code verification logic**
+
+The backup code verification logic is copy-pasted between two files:
+
+- `packages/features/auth/lib/next-auth-options.ts:131-155` (login)
+- `apps/web/pages/api/auth/two-factor/totp/disable.ts:48-64` (disable)
+
+Both do: decrypt → parse JSON → strip dashes → indexOf → handle not found. This is a textbook case for extraction into a shared utility, something like `verifyBackupCode(encryptedCodes: string, suppliedCode: string): { valid: boolean; index: number }`. Two places doing the same crypto operation with the same error handling is two places to get out of sync.
+
+**6. `backupCodes` state has no type annotation**
+
+`apps/web/components/settings/EnableTwoFactorModal.tsx:67`
+
+```js
+const [backupCodes, setBackupCodes] = useState([]);
+```
+
+This infers `never[]`. It works because React doesn't enforce this at runtime, but it's a type lie. Should be `useState<string[]>([])`.
+
+**7. `formatBackupCode` defined inside the component**
+
+`apps/web/components/settings/EnableTwoFactorModal.tsx:163`
+
+```js
+const formatBackupCode = (code: string) => `${code.slice(0, 5)}-${code.slice(5, 10)}`;
+```
+
+This is recreated on every render and is also used in the blob creation for download. It's a pure function with no dependencies on component state — pull it out of the component. Minor, but it's the kind of thing that signals "I didn't think about where this belongs."
+
+**8. Blob URL memory leak potential**
+
+`apps/web/components/settings/EnableTwoFactorModal.tsx:95-98`
+
+```js
+if (backupCodesUrl) URL.revokeObjectURL(backupCodesUrl);
+setBackupCodesUrl(URL.createObjectURL(textBlob));
+```
+
+The revocation happens *before* setting the new URL, which is fine, but there's no cleanup on unmount. If the component unmounts while a URL exists, it leaks. Use an effect cleanup or revoke in `resetState`.
+
+**9. Nested ternary is unreadable**
+
+`apps/web/pages/auth/login.tsx:221`
+
+```jsx
+{twoFactorRequired ? !twoFactorLostAccess ? <TwoFactor center /> : <BackupCode center /> : null}
+```
+
+This is genuinely hard to parse. Nested ternaries in JSX are a code smell. Break it into a variable or use early returns/`if` blocks.
+
+---
+
+### Abstraction Issues (Should Fix)
+
+**10. `BackupCode.tsx` component is named `TwoFactor` internally**
+
+`apps/web/components/auth/BackupCode.tsx:7`
+
+```js
+export default function TwoFactor({ center = true }) {
+```
+
+The file is `BackupCode.tsx`, the export is `default`, but the function is named `TwoFactor`. This is confusing when debugging — stack traces and React DevTools will show `TwoFactor` for two different components. Name it `BackupCode`.
+
+**11. `null` sentinel values in backup codes array**
+
+`packages/features/auth/lib/next-auth-options.ts:149`
+
+```js
+backupCodes[index] = null;
+```
+
+Used codes are replaced with `null` rather than being removed from the array. This means you now have a heterogeneous array (`(string | null)[]`) stored as encrypted JSON. The disable endpoint doesn't do this at all — it just nukes everything. If you later need to count remaining codes or display them, you're filtering nulls everywhere. Use `splice` or `filter` instead.
+
+---
+
+### Minor / Nitpicks
+
+**12.** The `resetForm` helper in `DisableTwoFactorModal.tsx` uses `form.setValue` three times instead of `form.reset()`. If more fields are added later, someone will forget to add them here.
+
+**13.** The test file has `TODO` and `FIXME` comments shipped in the PR. The FIXME about the switch check is a pre-existing bug being documented but not fixed — fine, but the TODOs for "check file content" and "check clipboard content" suggest the tests are incomplete. At minimum, note this in the PR description.
+
+**14.** The `tabIndex={-1}` change on the password visibility toggle (`Input.tsx`) is unrelated to backup codes. Should be a separate commit/PR for clean history.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix:**
+1. Move backup code generation to the enable step, not setup
+2. Extract shared backup code verification logic into a utility
+3. Fix the function name in `BackupCode.tsx` — it currently says `TwoFactor`
+
+**Should fix:**
+4. Add type annotation to `backupCodes` state (`string[]`)
+5. Replace `null` sentinel with array removal for used backup codes
+6. Clean up the nested ternary in `login.tsx`
+7. Add blob URL cleanup on unmount
+8. Use `form.reset()` instead of manual `setValue` calls
+
+**Nitpicks:**
+9. Pull `formatBackupCode` out of the component
+10. Separate the `tabIndex` change into its own commit
+11. Address or remove the TODO/FIXME comments before merge
+
+The security model is *mostly* right, but the timing of backup code generation (before 2FA is confirmed) and the duplicated verification logic are the kind of things that cause subtle bugs down the road when someone changes one path but not the other.

@@ -1,0 +1,17 @@
+{
+  "issues": [
+    "Authorization logic in addGuests.handler.ts:47-48 uses && (AND) instead of || (OR), requiring a user to be both admin AND owner, which incorrectly rejects admins who aren't owners.",
+    "Falling back to teamId 0 when there's no team could produce unexpected results depending on the query implementation; null teamId should be guarded explicitly.",
+    "Any attendee on a booking can add arbitrary guests without organizer consent (addGuests.handler.ts:51), which is a permissive default that should at minimum be configurable per event type.",
+    "No rate limiting or guest count cap on the endpoint, allowing someone to add unlimited guests and potentially abuse it as a spam relay since it triggers email sends.",
+    "Duplicate validation schema: ZAddGuestsInputSchema is defined both in addGuests.schema.ts and inside the AddGuestsDialog.tsx component, with differing validation rules (client checks uniqueness, server does not), and the component version is recreated every render.",
+    "Redundant organizer database fetch in addGuests.handler.ts:56-66 queries for the booking user again despite already including the user relation in the booking query.",
+    "Silent email failure in addGuests.handler.ts:166-168 catches the error but only logs a generic string with no error object, booking ID, or guest list, making production debugging impossible.",
+    "The newGuests parameter in email-manager.ts:523 is accepted but used against calendarEvent.attendees after a formatCalEvent transformation; it's unclear whether attendee emails survive the transformation intact.",
+    "MultiEmail component has awkward empty-state logic with two separate mutually exclusive conditional blocks instead of a simple if/else, and mutates the value prop with value = value || [] inside the component body.",
+    "The lazy loading wrapper in MultiEmailLazy.tsx uses 'as unknown as' type assertion to bypass type checking instead of fixing the actual type mismatch, and the 40kb size comment appears unverified.",
+    "multiEmailValue is initialized with [\"\"] not [], so the handleAdd check for multiEmailValue.length === 0 will never be true given this initial state.",
+    "The action ID is \"add_members\" in BookingListItem.tsx but the feature is about guests, not members \u2014 inconsistent terminology.",
+    "Missing blank line between sendLocationChangeEmails closing brace and sendAddGuestsEmails in email-manager.ts:522-523, suggesting careless code placement."
+  ]
+}

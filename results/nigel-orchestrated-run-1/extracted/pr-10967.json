@@ -1,0 +1,19 @@
+{
+  "issues": [
+    "In Google CalendarService's updateEvent and deleteEvent, the ternary for selectedCalendar is tautological: when externalCalendarId is falsy, the else branch searches for a calendar whose externalId equals that falsy value, making the .find() dead code that will virtually never match. Calendar updates and deletes will silently target the wrong calendar or no calendar when externalCalendarId is not provided.",
+    "In EventManager.ts around line 117, destructuring destinationCalendar with a fallback to an empty array means mainHostDestinationCalendar can be undefined, but .integration is accessed without optional chaining, causing a guaranteed TypeError crash when destinationCalendar is null, undefined, or empty.",
+    "The credential fallback pattern (check in-memory, then fetch from DB) is copy-pasted verbatim in three places: createAllCalendarEvents, updateAllCalendarEvents in EventManager.ts, and handleCancelBooking.ts. When the credential schema changes, someone will update one and forget the others.",
+    "The Calendar interface was changed to require credentialId in createEvent, but only Google Calendar actually uses it. Lark and Office365 still destructure [0] from the array (main host only), so the collective multiple-host fix only actually works for Google Calendar.",
+    "The credentialId parameter threaded through the Calendar interface is questionable since each CalendarService already has access to its own credential via this.credential or equivalent, forcing every provider to accept a parameter they shouldn't need.",
+    "In organizations/create.handler.ts, the condition for setting slug is logically inverted from the original behavior. Before, slug was set directly when billing was disabled; after, slug is set when billing is enabled. This is a semantic change that looks like a bug.",
+    "The organizations/create.handler.ts change is completely unrelated to destination calendars and violates atomic commit principles.",
+    "Inconsistent representation of empty destination calendars: most callsites use [] but handleNewBooking.ts uses null. Downstream code checks both truthy and .length > 0, causing subtle bugs since an empty array passes truthy but fails length, while null fails truthy.",
+    "In the loadUsers refactor in handleNewBooking.ts, the if (!Array.isArray(hosts)) check is dead code because hosts is always eventType.hosts || [], which is guaranteed to be an array.",
+    "The loadUsers refactor throws errors inside a try/catch that swallows them into a generic 'Unable to load users' message, losing useful error information.",
+    "The loadUsers refactor silently removed the organization select from the Prisma query, which is a potential silent regression.",
+    "The loadUsers refactor is completely unrelated to destination calendars and adds unnecessary complexity replacing a clean ternary with 30 lines of defensive code.",
+    "Magic strings like \"COLLECTIVE\" and \"ROUND_ROBIN\" replaced type-safe enum references (SchedulingType.COLLECTIVE), losing type safety and IDE refactoring support. Both magic strings and the enum import are used inconsistently in the same file.",
+    "The typo calenderExternalId survived untouched while other typos in the codebase were fixed.",
+    "Restating comments like 'Find in calEventRaw.destinationCalendar...' add noise without value and should be removed."
+  ]
+}

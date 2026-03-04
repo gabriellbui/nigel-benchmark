@@ -1,0 +1,14 @@
+{
+  "issues": [
+    "Authorization check in deleteCache.handler.ts only matches direct user ownership via userId, but the codebase may support team credentials or delegation credentials. The auth check should reuse the existing pattern from the credentials.delete mutation rather than reinventing it.",
+    "updateManyByCredentialId is called with empty data {} to trigger Prisma's @updatedAt side effect, which relies on undocumented ORM behavior. If Prisma optimizes away no-op updates in a future version, this silently breaks. The update should explicitly pass { updatedAt: new Date() }.",
+    "cacheUpdatedAt is derived from CalendarCache.updatedAt via getCacheStatusByCredentialIds(), but CalendarService.ts also bumps SelectedCalendar.updatedAt via updateManyByCredentialId. The source of truth for cache timestamp is unclear, and the SelectedCalendar.updatedAt write appears to serve no purpose in this PR.",
+    "Date formatting in CredentialActionsDropdown.tsx hardcodes \"en-US\" locale instead of using undefined (browser locale) or pulling from the app's i18n locale context.",
+    "Adding googleChannelId to the generic UserWithCalendars type leaks Google-specific implementation details into a type shared across all calendar integrations. If the field isn't consumed in this PR, it shouldn't be fetched.",
+    "The hasCache guard in CredentialActionsDropdown checks both integration type and cacheUpdatedAt, but the Google-specific type check is redundant coupling. The cacheUpdatedAt check alone should be sufficient to determine whether to show cache status.",
+    "The delete cache confirmation dialog closes immediately when onConfirm fires, with the mutation running in the background. If the mutation fails, the user has already lost the confirmation context. The dialog should stay open until the mutation settles, or use mutateAsync with proper error handling.",
+    "The test script scripts/test-gcal-webhooks.sh is a local dev utility for tunneling Google webhooks that is unrelated to cache status/actions and doesn't belong in this PR.",
+    "The dev:cron change from ts-node to npx tsx in package.json is unrelated to cache status and should be in a separate commit or PR.",
+    "The migration sets DEFAULT NOW() on the new updatedAt column, meaning all existing CalendarCache rows get the migration timestamp rather than their actual cache time. This could show misleading \"last updated\" times to users."
+  ]
+}

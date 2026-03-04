@@ -1,0 +1,94 @@
+## This needs serious work.
+
+The intent is fine — moving to dynamic imports for code splitting. But the execution introduces **at least one critical runtime bug** and the core approach doesn't actually achieve what it claims to.
+
+---
+
+### Critical: `async` callbacks inside `.forEach()` — silent fire-and-forget
+
+This is a **production bug**. In four separate locations, the PR changes `.forEach((bookingRef) => {` to `.forEach(async (bookingRef) => {`:
+
+- `packages/app-store/vital/lib/reschedule.ts`
+- `packages/app-store/wipemycalother/lib/reschedule.ts`
+- `packages/trpc/server/routers/viewer/bookings.tsx:553`
+- `packages/features/bookings/lib/handleCancelBooking.ts:458`
+
+`Array.forEach` does **not** await the return value of its callback. These async callbacks return promises that nobody awaits. Consequences:
+
+1. The surrounding `try/catch` blocks will **never catch errors** from these operations
+2. Calendar deletions and event updates will fire concurrently with **no ordering guarantees** and no error handling
+3. You get unhandled promise rejections in production
+
+The fix in `handleCancelBooking.ts:474` actually shows the right pattern — they converted one `.forEach` to a `for...of` loop with `await`. But they didn't apply it consistently. Every `forEach(async ...)` in this PR needs to be `for...of` or `Promise.all` with `.map`.
+
+---
+
+### Design: These aren't lazy imports — they're eager promises
+
+```ts
+const appStore = {
+  applecalendar: import("./applecalendar"),
+  caldavcalendar: import("./caldavcalendar"),
+  // ...
+};
+```
+
+Every `import()` call fires **immediately** when this module is loaded. You now have 28 promises all resolving in parallel at startup instead of 28 synchronous imports. That's not lazy loading — it's the same work with extra steps and worse ergonomics.
+
+If the goal is actual lazy loading, these should be thunks:
+
+```ts
+const appStore = {
+  applecalendar: () => import("./applecalendar"),
+  // ...
+};
+```
+
+Then callers invoke the thunk only when they need the module. As written, this PR adds `async/await` ceremony to every callsite for zero benefit.
+
+---
+
+### Missing abstraction: repeated app resolution pattern
+
+This pattern appears 5+ times across the codebase:
+
+```ts
+const app = await appStore[someKey as keyof typeof appStore];
+if (!(app && "lib" in app && "SomeService" in app.lib)) {
+  console.warn(`... is not implemented`);
+  return null;
+}
+```
+
+Seen in `getCalendar.ts`, `videoClient.ts`, `handleCancelBooking.ts`, `deletePayment.ts`, `handlePayment.ts`, and `bookings.tsx`. This is begging for a single `resolveAppModule(key: string)` helper that handles the await, the validation, and the warning. Instead we get the same boilerplate copy-pasted everywhere — and now every copy needs an `await` bolted on.
+
+---
+
+### Type safety: `getCalendarCredentials` is silently broken
+
+`getCalendarCredentials` is not marked `async`, but it calls `getCalendar()` which now returns `Promise<Calendar | null>`. The `calendar` property in the returned objects is now a `Promise<Calendar | null>` instead of `Calendar | null`, but the function signature doesn't reflect this. The PR works around it downstream by doing `await item.calendar` in `getConnectedCalendars`, but this is fragile — any other consumer of `getCalendarCredentials` will get a Promise where they expect a Calendar and TypeScript won't save them unless the types are explicitly updated.
+
+---
+
+### Nitpick: gratuitous whitespace
+
+The random blank line added in `CalendarManager.ts:31` inside `getCalendarCredentials` serves no purpose. Keep diffs clean.
+
+---
+
+### Prioritized recommendations
+
+**Must fix:**
+1. Every `.forEach(async ...)` → `for...of` with `await` or `Promise.all(arr.map(...))`. This is a runtime correctness issue — calendar events will silently fail to delete.
+2. Make `getCalendarCredentials` return type explicitly reflect that `calendar` is now a Promise, or make the function async.
+
+**Should fix:**
+3. Use thunks (`() => import(...)`) instead of bare `import()` calls if lazy loading is actually the goal. If it's not, document what the actual goal is, because right now this adds complexity for no measurable benefit.
+4. Extract the repeated app-resolution-and-validation pattern into a shared helper.
+
+**Nitpick:**
+5. Remove the stray blank line in `CalendarManager.ts`.
+
+---
+
+The `forEach(async ...)` bug alone is a blocker. That's the kind of thing that silently corrupts data in production and you don't find out until a user reports that their calendar events aren't being cleaned up. The rest is structural — the approach needs rethinking before it's worth iterating on the details.

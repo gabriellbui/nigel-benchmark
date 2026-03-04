@@ -1,0 +1,40 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "Injects the literal string \"refresh_token\" when the provider doesn't return one. Next refresh cycle sends refresh_token=refresh_token to the OAuth provider, which rejects it, permanently breaking the integration.",
+      "reasoning": "The review explicitly identifies the same defect: the hardcoded string 'refresh_token' is injected when the refresh token is missing, which breaks subsequent token refreshes and causes authentication failures."
+    },
+    {
+      "bug_idx": 1,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "`z.string().toString()` evaluates to the literal string `\"ZodString\"` at runtime. This doesn't create a dynamic key schema \u2014 it creates an object with a property literally named `\"ZodString\"`. This will never match `expires_in`, `expiry_date`, or any real provider response field.",
+      "reasoning": "The review identifies the same defect: computed property keys using Zod methods are invalid/broken in Zod object schemas, producing nonsensical literal property names instead of dynamic key validation."
+    },
+    {
+      "bug_idx": 2,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "The function returns the entire `{ success: true, data: {...} }` safeParse wrapper, not `refreshTokenResponse.data`. This cascades into: googlecalendar/lib/CalendarService.ts: Stores `{ success: true, data: {...} }` directly into the database as credential key.",
+      "reasoning": "The review explicitly identifies that parseRefreshTokenResponse returns the safeParse wrapper instead of the parsed data, and that this causes the credential key to be stored incorrectly \u2014 the exact same defect as the golden bug."
+    },
+    {
+      "bug_idx": 4,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "When APP_CREDENTIAL_SHARING_ENABLED is true, refreshOAuthTokens returns a raw fetch Response. Fetch Response objects don't have .data (that's Axios/Gaxios). So token becomes undefined, and the credential update writes garbage. The two code paths return fundamentally different shapes.",
+      "reasoning": "Review finding #3 identifies the exact same defect: the sync path returns a fetch Response which lacks .data, causing token to be undefined and downstream access to fail at runtime."
+    },
+    {
+      "bug_idx": 3,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "Finding #4: 'The sync branch returns a raw fetch Response. The normal branch returns whatever the provider-specific function returns (GaxiosResponse, HubspotToken, AxiosResponse, etc.). Return type is any, hiding this completely from the type system. Every caller has to handle both shapes; none of them do.' Finding #3 also specifically calls out Google Calendar's res.data access failing on the fetch Response.",
+      "reasoning": "The review explicitly identifies that refreshOAuthTokens returns a raw fetch Response in the sync-enabled path while callers like GoogleCalendarService expect res.data and others expect provider-specific types like HubspotToken, which is the exact same root cause as the golden bug."
+    }
+  ],
+  "bugs": 5
+}

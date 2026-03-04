@@ -1,0 +1,126 @@
+## This needs work.
+
+The direction is right — moving from Prisma's query builder to raw SQL for insights queries makes sense for performance. But the execution has several issues that'll bite you in production or make the next person's life miserable.
+
+---
+
+### Design Issues
+
+**1. `getBaseConditions` has a logic bug when both conditions are null/falsy**
+
+`insightsBooking.ts` — `getBaseConditions()`: If `authConditions` is the `NOTHING_CONDITION` (`1=0`) and `filterConditions` is `null`, you fall into the `else if (authConditions)` branch and return `1=0` directly. That's technically correct but only by accident. The real problem: `authConditions` is *never* null — `buildAuthorizationConditions` always returns a `Prisma.Sql`. So the `filterConditions`-only branch is dead code. Meanwhile, the final `else` returning `NOTHING_CONDITION` is also unreachable. This method has four branches where only two can ever execute.
+
+```ts
+if (authConditions && filterConditions) {
+  return Prisma.sql`(${authConditions}) AND (${filterConditions})`;
+} else if (authConditions) {
+  return authConditions;  // always hits here when no filters
+} else if (filterConditions) {
+  return filterConditions;  // dead code
+} else {
+  return NOTHING_CONDITION;  // dead code
+}
+```
+
+Simplify to two branches: has filters or doesn't.
+
+**2. `buildTeamAuthorizationCondition` — empty `userIdsFromTeam` silently drops the OR clause**
+
+`insightsBooking.ts:193-204`: When `userIdsFromTeam` is empty, you only get the team booking condition. The old code *always* included both OR branches (team bookings + user bookings). Now a team with no individual-user bookings mapping silently changes behavior. Is this intentional? If so, it should be called out in a comment. If not, it's a regression.
+
+Same issue exists in `buildOrgAuthorizationCondition` — the old code had a conditional too, but it was explicit with the spread. Worth a comment either way since this is authorization logic and silent behavior changes here are dangerous.
+
+**3. `InsightsBookingServicePublicOptions` — why does this exist?**
+
+`insightsBooking.ts:29-34`: You added a new type that's a looser version of the existing `InsightsBookingServiceOptions` (no discriminated union, all scopes share the same shape). The constructor now accepts this instead of the validated schema output. This means you've *weakened* the type safety — someone can pass `scope: "team"` without `teamId` and TypeScript won't complain. The discriminated union existed for a reason.
+
+```ts
+export type InsightsBookingServicePublicOptions = {
+  scope: "user" | "org" | "team";
+  userId: number;
+  orgId: number;
+  teamId?: number;  // optional even for scope: "team" — bad
+};
+```
+
+If the old type was too strict for callers, the fix is an adapter at the boundary, not loosening the internal type.
+
+**4. Removed `findMany` — breaking the public API without a migration path**
+
+The `findMany` method was the primary interface. It's been replaced with `getBaseConditions()` which returns a raw SQL fragment that callers must manually embed in `$queryRaw`. This pushes SQL construction concerns to every caller. Every consumer now needs to know the table name, write raw SQL, and correctly interpolate the conditions. That's a significant ergonomic regression and a maintenance hazard — if the table name changes, you're grep-fixing across the codebase.
+
+Consider at minimum a method that executes the query internally, or a constant for the table name.
+
+---
+
+### Abstraction Problems
+
+**5. The `reduce` pattern for joining SQL conditions is repeated three times**
+
+`insightsBooking.ts` — `buildFilterConditions`, `buildOrgAuthorizationCondition`, `buildTeamAuthorizationCondition` all have:
+
+```ts
+return conditions.reduce((acc, condition, index) => {
+  if (index === 0) return condition;
+  return Prisma.sql`(${acc}) AND (${condition})`;
+});
+```
+
+(with `OR` in two places). Extract a helper:
+
+```ts
+function joinSql(conditions: Prisma.Sql[], operator: 'AND' | 'OR'): Prisma.Sql
+```
+
+This is the kind of utility that earns its existence immediately. Three repetitions in one file.
+
+**6. `ANY(${array})` — does Prisma's `sql` template handle array parameters correctly for all engines?**
+
+`Prisma.sql` with `ANY(${array})` works for PostgreSQL but this is a Prisma abstraction layer. If there's any chance of non-Postgres usage, this is a landmine. Even if Postgres-only, verify that `Prisma.sql` correctly serializes arrays to `{1,2,3}` format for `= ANY()`. If it doesn't, you'll get runtime errors that no type checker will catch. This is the fundamental risk of raw SQL — the compiler can't help you.
+
+---
+
+### Test Quality
+
+**7. Caching tests were deleted entirely**
+
+The caching mechanism (`cachedAuthConditions`, `cachedFilterConditions`) still exists in the implementation, but the tests validating it were removed. If caching is still part of the design, it should still be tested. If caching is no longer important, remove the caching code too.
+
+**8. Test assertions on `Prisma.Sql` objects are fragile**
+
+```ts
+expect(conditions).toEqual(Prisma.sql`("userId" = ${testData.user.id}) AND ("teamId" IS NULL)`);
+```
+
+You're comparing `Prisma.Sql` template objects with `toEqual`. This works today because `Prisma.Sql` has a specific internal structure, but it's an implementation detail. If Prisma changes how `Sql` objects are structured internally, every test breaks. Consider testing the *output* (run the query, check results) rather than the intermediate SQL representation. The `getBaseConditions` test does this correctly — the others should follow suit.
+
+---
+
+### Minor Issues
+
+**9. `isOrgOwnerOrAdmin` change is fine but unrelated**
+
+```ts
+// Old: ([MembershipRole.OWNER, MembershipRole.ADMIN] as const).includes(membership.role)
+// New: membership.role === MembershipRole.OWNER || membership.role === MembershipRole.ADMIN
+```
+
+Cleaner. No complaints. But it's a drive-by change — should be its own commit if you're being disciplined about atomic commits.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix:**
+1. Extract a `joinSql` helper — three identical reduces is asking for a divergence bug
+2. Fix or document the `InsightsBookingServicePublicOptions` type safety regression — don't silently weaken discriminated unions
+3. Either restore caching tests or remove the caching mechanism
+
+**Should fix:**
+4. Simplify `getBaseConditions` — remove dead branches, make the actual flow obvious
+5. Add a comment on the empty-array guard in team/org authorization — this is auth logic, intent must be explicit
+6. Consider keeping an execution method (like `findMany` was) so callers don't all need to write raw SQL with hardcoded table names
+
+**Nitpick:**
+7. The test assertions on `Prisma.Sql` objects will be the first thing to break on a Prisma upgrade — integration-style assertions (query + check results) are more durable
+8. The `isOrgOwnerOrAdmin` change should be a separate commit

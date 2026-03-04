@@ -1,0 +1,33 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.95,
+      "evidence": "`BackupCode` component named like a data model, exported as default but function is named `TwoFactor`... The file is `BackupCode.tsx`, the export is default, but the function is named `TwoFactor`. This is going to confuse every developer who touches this.",
+      "reasoning": "The review explicitly identifies the inconsistent naming issue where the function is named TwoFactor but lives in BackupCode.tsx, which is the exact defect described in the golden bug."
+    },
+    {
+      "bug_idx": 1,
+      "match": false,
+      "confidence": 0.95,
+      "evidence": "",
+      "reasoning": "The review discusses several issues with the disable endpoint (backup code not invalidated, no rate limiting) but never identifies the specific defect that an error message incorrectly references 'backup code login' instead of the correct disable context."
+    },
+    {
+      "bug_idx": 2,
+      "match": false,
+      "confidence": 0.95,
+      "evidence": "",
+      "reasoning": "The review mentions indexOf() in the context of duplicated verification logic (point #5) but never identifies the case-sensitivity defect \u2014 it focuses on code duplication, not on the fact that indexOf() performs a case-sensitive comparison that would reject uppercase hex input."
+    },
+    {
+      "bug_idx": 3,
+      "match": false,
+      "confidence": 0.95,
+      "evidence": "",
+      "reasoning": "The review never identifies the concurrency/TOCTOU race condition where two simultaneous login requests could both validate and consume the same backup code due to the in-memory decrypt-mutate-write-back pattern; the closest items (#3 about partial failure on disable, #6 about null sentinels) address different problems in the same code area."
+    }
+  ],
+  "bugs": 4
+}

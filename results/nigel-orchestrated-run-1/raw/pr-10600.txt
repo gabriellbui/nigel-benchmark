@@ -1,0 +1,172 @@
+# Nigel's Review: PR #10600 — feat: 2fa backup codes
+
+## Overall Assessment: This needs work. There are real security defects here.
+
+The feature itself is sensible and needed — backup codes for 2FA are table stakes. The overall integration approach is reasonable: backup codes generated at setup time, encrypted alongside the existing 2FA secret, usable for both login and disabling 2FA. The author clearly understood the existing codebase patterns. But there are several issues ranging from a genuine race condition to copy-pasted validation logic to a component that lies about its own name.
+
+---
+
+## CRITICAL: Security Issues
+
+### 1. Race condition on backup code consumption during login (HIGH)
+
+**File:** `packages/features/auth/lib/next-auth-options.ts`
+
+```typescript
+const backupCodes = JSON.parse(
+  symmetricDecrypt(user.backupCodes, process.env.CALENDSO_ENCRYPTION_KEY)
+);
+const index = backupCodes.indexOf(credentials.backupCode.replaceAll("-", ""));
+if (index === -1) throw new Error(ErrorCode.IncorrectBackupCode);
+
+backupCodes[index] = null;
+await prisma.user.update({
+  where: { id: user.id },
+  data: {
+    backupCodes: symmetricEncrypt(JSON.stringify(backupCodes), process.env.CALENDSO_ENCRYPTION_KEY),
+  },
+});
+```
+
+Classic TOCTOU (time-of-check-time-of-use) race condition. Two concurrent requests with the same backup code will both read the same encrypted blob, both find the code, both "use" it, and both write back. The single-use guarantee is broken. The correct approach would be an atomic operation — either a database transaction with a row lock (`SELECT ... FOR UPDATE`), or at minimum optimistic concurrency control. Backup codes exist precisely for scenarios where an attacker might be trying things in parallel. This is an authentication bypass.
+
+### 2. Backup codes are encrypted, not hashed (MEDIUM — design decision worth questioning)
+
+**File:** `apps/web/pages/api/auth/two-factor/totp/setup.ts`
+
+```typescript
+backupCodes: symmetricEncrypt(JSON.stringify(backupCodes), process.env.CALENDSO_ENCRYPTION_KEY),
+```
+
+Industry standard is to hash backup codes (like passwords) and never store them reversibly. If `CALENDSO_ENCRYPTION_KEY` is compromised, every user's backup codes are exposed in plaintext — functionally equivalent to having no 2FA. The "displayability" argument is weak: you show backup codes once at generation time and tell users to save them. Google, GitHub, etc. all hash them. This is the wrong tradeoff for authentication-critical data.
+
+### 3. Backup code validation is case-sensitive (MEDIUM)
+
+**Files:** `packages/features/auth/lib/next-auth-options.ts` and `apps/web/pages/api/auth/two-factor/totp/disable.ts`
+
+```typescript
+const index = backupCodes.indexOf(credentials.backupCode.replaceAll("-", ""));
+```
+
+Backup codes are hex strings from `crypto.randomBytes(5).toString("hex")` (lowercase). If a user types `A3F2B` instead of `a3f2b`, it fails. This is user-hostile for a feature that is explicitly the "I am already locked out" escape hatch. A `.toLowerCase()` call costs nothing and prevents support tickets.
+
+### 4. No rate limiting on backup code attempts
+
+Neither endpoint has rate limiting specific to backup code attempts. 10 hex chars = 16^10 possibilities, but with 10 valid codes the effective search space is reduced. The existing TOTP rate limiting should extend to backup codes.
+
+---
+
+## Design Issues
+
+### 5. Duplicated backup code validation logic (MEDIUM)
+
+**Files:** `packages/features/auth/lib/next-auth-options.ts` and `apps/web/pages/api/auth/two-factor/totp/disable.ts`
+
+The backup code validation block is essentially copy-pasted between these two files — same decrypt, same `indexOf`, same error codes, different error reporting mechanisms (throw vs. `res.status`). This is begging for a shared `validateBackupCode(user, suppliedCode)` utility. When someone needs to change validation (say, adding `.toLowerCase()`), they'll fix one location and forget the other.
+
+### 6. Copy-paste error in console.error message
+
+**File:** `apps/web/pages/api/auth/two-factor/totp/disable.ts`
+
+```typescript
+console.error("Missing encryption key; cannot proceed with backup code login.");
+```
+
+Says "backup code login" but this is the *disable* endpoint. Clearly copy-pasted from the login flow — proof the code should have been extracted.
+
+### 7. Backup codes generated at setup, not at enable (MEDIUM)
+
+**File:** `apps/web/pages/api/auth/two-factor/totp/setup.ts`
+
+Codes are generated during `setup` before the user has enabled 2FA. If they abandon setup after seeing the QR code, backup codes sit in the database for a user with `twoFactorEnabled: false`. Ideally codes would be generated at the `enable` step after TOTP verification succeeds.
+
+### 8. SetupStep enum ordering is misleading
+
+**File:** `apps/web/components/settings/EnableTwoFactorModal.tsx`
+
+```typescript
+enum SetupStep {
+  ConfirmPassword,
+  DisplayBackupCodes,  // ordinal 1
+  DisplayQrCode,       // ordinal 2
+  EnterTotpCode,       // ordinal 3
+}
+```
+
+Actual flow: ConfirmPassword → DisplayQrCode → EnterTotpCode → DisplayBackupCodes. The enum has `DisplayBackupCodes` at position 1, which is misleading.
+
+---
+
+## Naming and Component Issues
+
+### 9. BackupCode.tsx exports a function named `TwoFactor`
+
+**File:** `apps/web/components/auth/BackupCode.tsx`
+
+```typescript
+export default function TwoFactor({ center = true }) {
+```
+
+File is `BackupCode.tsx`. Export is named `TwoFactor`. The existing `TwoFactor.tsx` also exports `TwoFactor`. Two files exporting the same function name with completely different purposes. Name it `BackupCode` or `BackupCodeInput`.
+
+### 10. Nested ternary readability disaster
+
+**File:** `apps/web/pages/auth/login.tsx`
+
+```typescript
+{twoFactorRequired ? !twoFactorLostAccess ? <TwoFactor center /> : <BackupCode center /> : null}
+```
+
+Nested ternary with no parentheses. Should be:
+```typescript
+{twoFactorRequired && (twoFactorLostAccess ? <BackupCode center /> : <TwoFactor center />)}
+```
+
+---
+
+## Comment Quality
+
+Comments are mostly decent. `// we delete all stored backup codes at the end, no need to do this here` and `// delete verified backup code and re-encrypt remaining` explain *why*, which is exactly right. The `minLength={10} // without dash` comments justify magic numbers. The TODO comments in tests are honest about incomplete coverage.
+
+---
+
+## Testing Gaps
+
+### 12. No test for login or disable with backup code
+
+**File:** `apps/web/playwright/login.2fa.e2e.ts`
+
+```typescript
+// TODO: add more backup code tests, e.g. login + disabling 2fa with backup
+```
+
+The happy path (download/copy/close buttons during setup) is tested. Zero tests for the security-critical paths: logging in with a backup code, disabling 2FA with a backup code, using a consumed code, using an invalid code. This is authentication code — the bar is higher.
+
+---
+
+## Prioritized Recommendations
+
+### Must Change
+1. **Fix the race condition** on backup code consumption. Use a database transaction with row locking.
+2. **Extract backup code validation** into a shared utility. The duplication has already produced a copy-paste bug.
+3. **Add `.toLowerCase()`** to backup code comparison. Case-sensitive hex in an emergency recovery flow is user-hostile.
+
+### Should Change
+4. **Rename the export** in `BackupCode.tsx` from `TwoFactor` to `BackupCode`.
+5. **Reorder the `SetupStep` enum** to match actual user flow.
+6. **Fix the nested ternary** in `login.tsx`.
+7. **Add tests** for login and disable with backup codes.
+8. **Consider hashing** backup codes instead of encrypting. Harder to change later.
+
+### Nitpicks
+9. Fix the stale "backup code login" error message in the disable endpoint.
+10. Revoke the object URL in `resetState()`.
+11. Generate backup codes at `enable` rather than `setup`.
+
+---
+
+## Final Word
+
+This is clearly human-written code from someone who understands the existing codebase patterns. It does not smell like AI slop. The feature design is sound and the UX flow shows thoughtfulness.
+
+That said, the race condition is a real security bug, the duplicated validation logic is a maintenance timebomb, and the case sensitivity issue will absolutely generate user complaints. For authentication code, the bar is higher than "it works in the happy path." Fix those three things and this is a solid contribution.

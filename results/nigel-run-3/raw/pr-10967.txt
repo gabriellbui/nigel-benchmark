@@ -1,0 +1,188 @@
+*cracks knuckles*
+
+Right. Let me dig into this properly.
+
+---
+
+## Overall Assessment: This needs significant work.
+
+The intent is clear — convert `destinationCalendar` from a single object to an array to support collective event types with multiple hosts. That's a legitimate architectural change. But the execution is sloppy, riddled with copy-paste patterns, logic bugs, and the kind of "just make it work" energy that creates maintenance nightmares.
+
+---
+
+### Critical Bugs
+
+**1. Dead code in `updateEvent` and `deleteEvent` — logic that can never match**
+
+`packages/app-store/googlecalendar/lib/CalendarService.ts`
+
+```typescript
+// updateEvent:
+const selectedCalendar = externalCalendarId
+  ? externalCalendarId
+  : event.destinationCalendar?.find((cal) => cal.externalId === externalCalendarId)?.externalId;
+
+// deleteEvent:
+const calendarId = externalCalendarId
+  ? externalCalendarId
+  : event.destinationCalendar?.find((cal) => cal.externalId === externalCalendarId)?.externalId;
+```
+
+If `externalCalendarId` is falsy, you hit the else branch... which searches for a calendar matching `externalCalendarId` — which is falsy. This will **always** return `undefined` in the else branch. The `.find()` is dead code. This was clearly a mechanical find-and-replace that nobody actually thought through. In `deleteEvent`, this means you'll fall back to `defaultCalendarId` ("primary") when you shouldn't, potentially deleting from the wrong calendar.
+
+**2. Null dereference in EventManager**
+
+`packages/core/EventManager.ts:117`
+
+```typescript
+const [mainHostDestinationCalendar] = evt.destinationCalendar ?? [];
+if (evt.location === MeetLocationType && mainHostDestinationCalendar.integration !== "google_calendar") {
+```
+
+If `destinationCalendar` is `null` or empty array, `mainHostDestinationCalendar` is `undefined`, and accessing `.integration` on it throws. The old code had optional chaining (`evt.destinationCalendar?.integration`); this rewrite removed the safety without adding a guard. This is a runtime crash waiting to happen.
+
+**3. `createEvent` signature change breaks the interface contract inconsistently**
+
+`packages/types/Calendar.d.ts` now requires:
+```typescript
+createEvent(event: CalendarEvent, credentialId: number): Promise<NewCalendarEventType>;
+```
+
+But `office365calendar` and `larkcalendar` still have the old signature:
+```typescript
+async createEvent(event: CalendarEvent): Promise<NewCalendarEventType>
+```
+
+Only `GoogleCalendarService` was updated to accept `credentialId`. The others silently ignore it because JavaScript doesn't enforce arity, but this is a type-level lie. Either all calendar implementations need updating or the parameter should be optional in the interface.
+
+---
+
+### Design Issues
+
+**4. Copy-pasted credential fetching — extract it**
+
+The exact same "fetch credential from DB if not in local array" block appears **three times**:
+
+- `EventManager.ts` `createAllCalendarEvents` (~line 350)
+- `EventManager.ts` `updateAllCalendarEvents` (~line 510)  
+- `handleCancelBooking.ts` (~line 430)
+
+All three do:
+```typescript
+const credentialFromDB = await prisma.credential.findUnique({
+  include: { app: { select: { slug: true } } },
+  where: { id: credentialId },
+});
+if (credentialFromDB && credentialFromDB.app?.slug) {
+  credential = {
+    appName: credentialFromDB?.app.slug ?? "",
+    id: credentialFromDB.id,
+    type: credentialFromDB.type,
+    // ... same shape every time
+  };
+}
+```
+
+This is textbook "needs a helper function." Three copies means three places to update when the credential shape changes, three places to get wrong. Something like `resolveCredential(id, localCredentials)` on the EventManager class.
+
+**5. Inconsistent array wrapping pattern scattered everywhere**
+
+This ternary appears in at least **8 different files**:
+```typescript
+destinationCalendar: booking.destinationCalendar
+  ? [booking.destinationCalendar]
+  : user.destinationCalendar
+  ? [user.destinationCalendar]
+  : []
+```
+
+This is a migration concern leaking into every consumer. There should be a single utility:
+```typescript
+function toDestinationCalendarArray(
+  primary?: DestinationCalendar | null,
+  fallback?: DestinationCalendar | null
+): DestinationCalendar[]
+```
+
+Called once at each boundary where DB data meets the `CalendarEvent` type. Instead, every file independently reimplements the wrapping logic with subtle formatting variations.
+
+**6. The `mainHostDestinationCalendar` destructuring pattern**
+
+```typescript
+const [mainHostDestinationCalendar] = event.destinationCalendar ?? [];
+```
+
+This appears in **8 places** across different calendar services. It's the same "take the first element" logic copy-pasted everywhere. If the semantics of "main host" ever change (e.g., needs to match by some criteria rather than just being first), you're updating 8 files.
+
+---
+
+### Questionable Changes
+
+**7. Unrelated `loadUsers` rewrite in `handleNewBooking.ts`**
+
+The `loadUsers` function was rewritten from a concise ternary chain into a verbose try/catch with explicit error handling that wraps Prisma errors into generic HTTP 500s. This:
+
+- Loses the original error detail for debugging
+- Adds validation (`Array.isArray(dynamicUserList)`) that should be caught by the schema/type layer above
+- Removes the `organization` select that was there before — is that intentional?
+- Is completely unrelated to the destinationCalendar change
+
+This smells like AI-generated "defensive coding" bolted onto an unrelated PR.
+
+**8. Unrelated organization `create.handler.ts` change**
+
+```typescript
+-  ...(!IS_TEAM_BILLING_ENABLED && { slug }),
++  ...(IS_TEAM_BILLING_ENABLED ? { slug } : {}),
+```
+
+These are **not semantically equivalent**. The original spreads `slug` when billing is **disabled**. The replacement spreads `slug` when billing is **enabled**. This is either an intentional logic inversion (in which case it belongs in its own PR with explanation) or a bug. Either way, it has nothing to do with destinationCalendar.
+
+**9. The `isTeamEventType` change**
+
+```typescript
+- eventType.schedulingType === SchedulingType.COLLECTIVE ||
+-   eventType.schedulingType === SchedulingType.ROUND_ROBIN;
++ !!eventType.schedulingType && ["COLLECTIVE", "ROUND_ROBIN"].includes(eventType.schedulingType);
+```
+
+Using string literals instead of the enum. Why? The enum exists for a reason. If someone renames the enum value, TypeScript catches it with the original code; the string literal silently breaks.
+
+**10. Typo fix and import reformatting snuck in**
+
+`orginalBookingDuration` → `originalBookingDuration` and the `Prisma`/`Booking` import split. Fine changes individually, but they pollute a PR that's supposed to be about one thing. These should be separate commits at minimum.
+
+---
+
+### The Duplicate `if (!calendarReference)` Fix
+
+`packages/core/EventManager.ts` — the old code had:
+```typescript
+if (!calendarReference)
+  if (!calendarReference) {
+```
+
+Good catch fixing the double-check bug. But this was clearly pre-existing and should have been its own fix or at least called out.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix:**
+1. The dead `.find()` logic in Google Calendar's `updateEvent`/`deleteEvent` — this is actively broken
+2. The null dereference on `mainHostDestinationCalendar.integration` in EventManager
+3. The `create.handler.ts` logic inversion (`!IS_TEAM_BILLING_ENABLED` → `IS_TEAM_BILLING_ENABLED`) — verify intent
+4. Make `credentialId` optional in the `Calendar.createEvent` interface, or update all implementations
+
+**Should fix:**
+5. Extract credential-fetching into a shared helper (3x duplication)
+6. Extract the `destinationCalendar` array-wrapping into a utility function (8x duplication)
+7. Extract `mainHostDestinationCalendar` resolution into a shared helper
+8. Use the `SchedulingType` enum instead of string literals
+
+**Should split out:**
+9. The `loadUsers` rewrite, typo fix, import changes, org handler change — separate PRs or at least separate commits
+
+---
+
+**Bottom line:** The core idea is sound, but the execution has real bugs (the `.find()` with a falsy value, the null deref), significant duplication, and unrelated changes mixed in. This needs another pass before it's safe to merge.

@@ -1,0 +1,90 @@
+## Not terrible, but there are some real concerns here.
+
+The intent is clear: migrating from Prisma's query builder to raw SQL via `Prisma.sql` tagged templates, presumably for performance. The mechanical conversion is mostly competent, but there are structural issues that will bite someone later.
+
+---
+
+### Design Issues
+
+**1. `getBaseConditions` has a logic bug when both conditions are absent**
+
+`insightsBooking.ts` — The fallback in `getBaseConditions` returns `NOTHING_CONDITION` (`1=0`) when *neither* auth nor filter conditions exist. But `getFilterConditions` returns `null` when there are no filters, and `getAuthorizationConditions` always returns a `Prisma.Sql` (never null). So the `else` branch (`return NOTHING_CONDITION`) is only reachable if `authConditions` is falsy — but it's always a `Prisma.Sql` object, which is truthy. This means the `else` branch is dead code masquerading as a safety net. Either make the intent explicit or remove it. Dead branches in query-building code are how you get `WHERE 1=0` in production and a very confusing support ticket.
+
+**2. `buildTeamAuthorizationCondition` — empty `userIdsFromTeam` silently drops the non-team-booking clause**
+
+When `userIdsFromTeam` is empty, the condition only matches team bookings. The old Prisma code *always* included the `userId: { in: userIdsFromTeam }` clause regardless of array length. Now it's conditionally omitted. This is a behavioral change hidden inside a "migration" PR. If this is intentional, it needs a comment explaining why. If not, it's a bug. Same applies to `buildOrgAuthorizationCondition`.
+
+**3. The `reduce` pattern for joining SQL fragments is repeated three times**
+
+```ts
+conditions.reduce((acc, condition, index) => {
+  if (index === 0) return condition;
+  return Prisma.sql`(${acc}) OR (${condition})`;
+});
+```
+
+This exact pattern appears in `buildOrgAuthorizationCondition`, `buildTeamAuthorizationCondition`, and a similar AND variant in `buildFilterConditions`. Extract a helper — `joinSql(conditions, 'AND' | 'OR')` or similar. Three copies is enough to justify the abstraction, and it's the kind of thing someone will get wrong when copy-pasting a fourth time.
+
+**4. `InsightsBookingServicePublicOptions` is exported but has no clear relationship to the validated schema type**
+
+You've got `insightsBookingServiceOptionsSchema` (Zod) that produces `InsightsBookingServiceOptions`, and now a hand-rolled `InsightsBookingServicePublicOptions` that looks like a loose superset. The constructor accepts `InsightsBookingServicePublicOptions` but the internal methods still use `Extract<InsightsBookingServiceOptions, ...>`. This type mismatch is asking for a runtime surprise. If the constructor accepts a looser type, the `Extract` types on the private methods are lying about their guarantees.
+
+**5. `findMany` was removed but no replacement query pattern is shown**
+
+The old `findMany` was the public API. Now consumers get `getBaseConditions()` and have to stitch together their own `$queryRaw`. The test shows this inline SQL assembly:
+
+```ts
+const results = await prisma.$queryRaw<{ id: number }[]>`
+  SELECT id FROM "BookingTimeStatusDenormalized"
+  WHERE ${baseConditions}
+`;
+```
+
+Every caller now needs to know the table name, column names, and how to compose raw SQL. That's a step backward in encapsulation. The service should still own query execution — maybe a different method signature, but the caller shouldn't be writing SQL against internal tables.
+
+---
+
+### Abstraction Problems
+
+**6. `Prisma.sql` fragments as return types leak implementation details**
+
+Every public method now returns `Prisma.Sql`. Any consumer is now coupled to Prisma's raw query API. If you ever need to support a different query backend or compose these conditions differently, you're locked in. The old approach at least returned a structured object. Consider whether these methods should remain public or whether the service should expose higher-level query methods instead.
+
+---
+
+### Test Quality
+
+**7. Caching tests were removed entirely**
+
+The "Caching" describe block was deleted. If caching was removed from the implementation, fine — but it wasn't. `cachedAuthConditions` and `cachedFilterConditions` are still there. Removing tests for existing behavior without removing the behavior is how you get untested code paths that silently rot.
+
+**8. Test assertions on `Prisma.Sql` objects are fragile**
+
+```ts
+expect(conditions).toEqual(Prisma.sql`("userId" = ${testData.user.id}) AND ("teamId" IS NULL)`);
+```
+
+This works because `Prisma.sql` returns a structured object with `strings` and `values` arrays, and `toEqual` does deep comparison. But it's opaque — when this fails, the diff will be incomprehensible. Consider asserting on the SQL string and parameter values separately, or at minimum add a comment explaining *why* `toEqual` works here so the next person doesn't waste 30 minutes figuring it out.
+
+---
+
+### Minor / Nitpick
+
+**9.** The `isOrgOwnerOrAdmin` change from `.includes()` to explicit `===` comparisons is fine but unrelated to the Prisma.sql migration. Keep PRs focused.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix:**
+1. Clarify or fix the behavioral change around empty `userIdsFromTeam`/`userIdsFromOrg` arrays — this could be a data access bug
+2. Reconcile `InsightsBookingServicePublicOptions` with the Zod schema type — the type mismatch between constructor and internal methods is a trap
+3. Either restore the caching tests or remove the caching mechanism — having untested caching is worse than having no caching
+
+**Should fix:**
+4. Extract the `reduce`-based SQL joining into a shared helper — three copies is the threshold
+5. Don't expose raw `Prisma.Sql` from the public API without a query execution method — the service lost its encapsulation
+
+**Nitpick:**
+6. Add a comment on the test assertions explaining why `toEqual` works with `Prisma.sql` objects
+7. Keep the `isOrgOwnerOrAdmin` style change in a separate commit

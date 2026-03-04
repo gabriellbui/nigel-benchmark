@@ -1,0 +1,151 @@
+# Code Review: Advanced date override handling and timezone compatibility improvements
+
+**Overall Assessment: This needs work.** There are real bugs hiding in here, some genuinely confusing logic, and the kind of timezone math that will haunt someone at 3am when a user in Auckland can't book a slot.
+
+---
+
+## Critical Bugs
+
+### 1. Dead comparison with `===` on Dayjs objects
+`packages/trpc/server/routers/viewer/slots.ts` — the new `checkIfIsAvailable` logic:
+
+```js
+if (dayjs(date.start).add(utcOffset, "minutes") === dayjs(date.end).add(utcOffset, "minutes")) {
+  return true;
+}
+```
+
+This will **never** be true. `===` on two different Dayjs objects is a reference comparison, not a value comparison. You need `.isSame()`. This entire branch is dead code sitting there pretending to do something.
+
+### 2. `end` is always equal to `start` — working hours check is broken
+```js
+const start = slotStartTime.hour() * 60 + slotStartTime.minute();
+const end = slotStartTime.hour() * 60 + slotStartTime.minute();
+if (start < workingHour.startTime || end > workingHour.endTime) {
+```
+
+`start` and `end` are computed identically — both from `slotStartTime`. The `end` should be derived from `slotEndTime`. As written, a 60-minute event that starts at 4:59pm will pass a 5pm boundary check because you're only checking the start minute for both bounds. This is a real bug that will let slots leak outside working hours.
+
+### 3. Side-effecting `.find()` with mutation of outer variable
+```js
+let dateOverrideExist = false;
+
+if (dateOverrides.find((date) => {
+    // ...
+    dateOverrideExist = true;
+    // ...
+})) {
+  return false;
+}
+
+if (dateOverrideExist) {
+  return true;
+}
+```
+
+Using `.find()` as a loop that mutates external state is a code smell that borders on a logic bug. The intent is: "if a date override exists for this day, use it; if the slot falls outside the override window, reject it." But the control flow is inverted and confusing:
+
+- `.find()` returns the first element where the callback returns truthy — but here "truthy" means the slot is **outside** the override, so `find` succeeding means "unavailable."
+- `dateOverrideExist` is set as a side-effect inside `.find()` regardless of whether `.find()` itself returns a match.
+
+This is the kind of logic that will be wrong in a subtle edge case and no one will be able to reason about why. Break this into explicit steps: filter overrides for the day, then check bounds.
+
+---
+
+## Design Issues
+
+### 4. Repeated offset arithmetic in `getSlots`
+`packages/lib/slots.ts`:
+
+```js
+dayjs(override.start).utc().add(offset, "minute").hour() * 60 +
+dayjs(override.start).utc().add(offset, "minute").minute()
+```
+
+This expression appears **four times** (twice for start, twice for end). Each one creates a new Dayjs object. Extract the adjusted times into variables:
+
+```js
+const adjustedStart = dayjs(override.start).utc().add(offset, 'minute');
+const adjustedEnd = dayjs(override.end).utc().add(offset, 'minute');
+return {
+  userIds: override.userId ? [override.userId] : [],
+  startTime: adjustedStart.hour() * 60 + adjustedStart.minute(),
+  endTime: adjustedEnd.hour() * 60 + adjustedEnd.minute(),
+};
+```
+
+### 5. Timezone offset logic is fragile and potentially wrong
+```js
+const organizerUtcOffset = dayjs(override.start.toString()).tz(override.timeZone).utcOffset();
+const inviteeUtcOffset = dayjs(override.start.toString()).tz(timeZone).utcOffset();
+const offset = inviteeUtcOffset - organizerUtcOffset;
+```
+
+Why `.toString()` on a Date? `dayjs(override.start)` handles Date objects fine. More importantly, applying the invitee-organizer offset difference to UTC times is a roundabout way to convert between timezones. Dayjs has `.tz()` for this. Manual offset arithmetic breaks when DST transitions happen between the override date and now, since `utcOffset()` is computed for that specific instant — but this code assumes it's stable. This is timezone bug bait.
+
+### 6. `organizerTimeZone` fallback chain appears twice
+```js
+// Line ~438
+const organizerTimeZone =
+  eventType.timeZone || eventType?.schedule?.timeZone || userAvailability?.[0]?.timeZone;
+```
+
+This was already computed inline at the old location and now it's hoisted — good. But then later:
+
+```js
+organizerTimeZone: schedule.timeZone,
+```
+
+Wait — you're passing `schedule.timeZone` as the organizer timezone when calling `checkIfIsAvailable`, not the `organizerTimeZone` you just computed. These could differ. Which is correct? If `schedule.timeZone` is the right one, why compute `organizerTimeZone` at all for the slot generation path? This inconsistency suggests unclear ownership of which timezone matters where.
+
+### 7. Polluting `TimeRange` with `timeZone`
+```ts
+export type TimeRange = {
+  userId?: number | null;
+  start: Date;
+  end: Date;
+  timeZone?: string;
+};
+```
+
+`TimeRange` is a shared type. Adding `timeZone` here means every consumer of `TimeRange` now has to wonder whether it's set and what it means. If only date overrides need timezone context, create a more specific type (`DateOverrideRange extends TimeRange`) rather than bloating the base type.
+
+---
+
+## Comment Quality
+
+- `//check if date override for slot exists` — missing space after `//`, and the comment just restates what the code (poorly) does. It should explain the *intent*: why date overrides take precedence over working hours.
+- `//if no date override for slot exists check if it is within normal work hours` — same formatting issue, but at least this one explains the fallback logic. Still needs a space.
+- `// it should return the same as this is the utc time` — in the test, this comment is vague. *Why* should it return the same? Because the override is stored in UTC and the timezone difference shouldn't affect UTC slot times? Say that.
+
+---
+
+## Test Coverage
+
+The new test case only checks one alternate timezone (`+6:00`) and expects identical UTC slots. That's the happy path. Where are tests for:
+- Invitee timezone where the date override falls on a different calendar day?
+- DST transitions (e.g., `America/New_York` in March)?
+- The working hours boundary check (which is currently broken)?
+- The "start equals end" date override case?
+
+One test for a timezone feature is not enough.
+
+---
+
+## Prioritized Recommendations
+
+**Must fix:**
+1. Fix the `===` Dayjs comparison — use `.isSame()`
+2. Fix the `end` variable in working hours check — use `slotEndTime`
+3. Refactor the `.find()` + `dateOverrideExist` side-effect pattern into something readable and correct
+
+**Should fix:**
+4. Extract repeated offset arithmetic into variables
+5. Reconsider manual UTC offset math — use Dayjs `.tz()` conversions directly
+6. Clarify which `timeZone` is authoritative when calling `checkIfIsAvailable`
+7. Don't pollute `TimeRange` — use a derived type
+
+**Nitpicks:**
+8. Fix comment formatting (space after `//`)
+9. Add more timezone edge case tests
+10. The removed blank lines (e.g., before `return true;`) are inconsequential but suggest the diff wasn't cleaned up before submitting

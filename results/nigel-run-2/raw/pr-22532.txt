@@ -1,0 +1,121 @@
+## Not terrible, but there are some real issues lurking here.
+
+The intent is clear — surface cache status for Google Calendar integrations and let users nuke the cache. The UI component is reasonably structured, the repository layer is clean, and the migration approach is safe. But there are authorization gaps, design inconsistencies, and some sloppy bits that need attention.
+
+---
+
+### Must Fix
+
+**1. Authorization bypass in `deleteCache.handler.ts`**
+
+The handler checks `userId` on the credential, but cal.com has delegation credentials and team/org credentials. This query only matches direct user ownership:
+
+```ts
+const credential = await prisma.credential.findFirst({
+  where: {
+    id: credentialId,
+    userId: user.id,
+  },
+});
+```
+
+If the codebase supports team credentials or delegation, this auth check is incomplete. Someone with a delegated credential wouldn't be able to delete their own cache (maybe fine), but more importantly — are there credential ownership models beyond `userId` that should be checked? This needs to match whatever auth pattern the existing `credentials.delete` mutation uses. Don't reinvent auth checks; reuse the existing one.
+
+**2. `updateManyByCredentialId` called with empty data — this is a hack**
+
+`packages/app-store/googlecalendar/lib/CalendarService.ts`:
+```ts
+await SelectedCalendarRepository.updateManyByCredentialId(this.credential.id, {});
+```
+
+Passing `{}` as the update data to trigger Prisma's `@updatedAt` side effect is clever but fragile. This relies on an implicit Prisma behavior where `updateMany` with empty data still bumps `@updatedAt` fields. This is undocumented behavior territory — if Prisma optimizes this away in a future version (skipping no-op updates), this silently breaks. 
+
+Either pass `{ updatedAt: new Date() }` explicitly, or add a comment explaining *why* empty data works and that it's intentional. Actually, just pass the date explicitly. Don't rely on ORM magic for business logic.
+
+**3. The `cacheUpdatedAt` is derived from the wrong source**
+
+The handler in `connectedCalendars.handler.ts` queries `CalendarCacheRepository.getCacheStatusByCredentialIds()` to get the max `updatedAt` from `CalendarCache` rows. But in `CalendarService.ts`, you're *also* touching `SelectedCalendar.updatedAt` via `updateManyByCredentialId`. 
+
+So which is the source of truth — `CalendarCache.updatedAt` or `SelectedCalendar.updatedAt`? You're writing to both but reading from `CalendarCache`. The `SelectedCalendar.updatedAt` bump appears to serve no purpose in this PR. If it's for a future feature, remove it — YAGNI. If it *is* needed, explain where it's consumed.
+
+---
+
+### Should Fix
+
+**4. Hardcoded locale in date formatting**
+
+`CredentialActionsDropdown.tsx`:
+```ts
+new Intl.DateTimeFormat("en-US", {
+  dateStyle: "short",
+  timeStyle: "short",
+}).format(new Date(cacheUpdatedAt))
+```
+
+Hardcoded `"en-US"` in an app that has an entire i18n system. Use `undefined` to respect the user's browser locale, or pull it from your locale context.
+
+**5. `UserWithCalendars` type is getting bloated**
+
+```ts
+"externalId" | "integration" | "eventTypeId" | "updatedAt" | "googleChannelId"
+```
+
+Adding `googleChannelId` to a generic `UserWithCalendars` type just to support Google-specific cache status leaks implementation details. `updatedAt` makes sense generically, but `googleChannelId` does not belong in a type shared across all calendar integrations. If this field isn't actually consumed anywhere in this PR's diff, don't fetch it.
+
+**6. `CredentialActionsDropdown` — the `hasCache` guard is too Google-specific**
+
+```ts
+const isGoogleCalendar = integrationType === GOOGLE_CALENDAR_TYPE;
+const hasCache = isGoogleCalendar && cacheUpdatedAt;
+```
+
+You're checking the integration type *and* the presence of cache data. If you eventually add caching for other calendar providers, you'll need to touch this component. The `cacheUpdatedAt` check alone should be sufficient — if cache data exists, show the status. The integration type check is redundant coupling.
+
+**7. No loading/pending state on the delete mutation**
+
+```ts
+onConfirm={() => {
+  deleteCacheMutation.mutate({ credentialId });
+  setDeleteModalOpen(false);
+}}
+```
+
+Dialog closes immediately, mutation fires in the background. If it fails, user already lost the confirmation context. Either keep the dialog open until settled, or use `mutateAsync` with proper error handling. Same issue with the disconnect mutation. The existing `DisconnectIntegration` component presumably handled this — check how it worked.
+
+---
+
+### Nitpicks
+
+**8. The test script doesn't belong in this PR**
+
+`scripts/test-gcal-webhooks.sh` is a local dev utility for tunneling Google webhooks. It's tangentially related to Google Calendar but has nothing to do with cache status/actions. Ship it separately or not at all — it clutters the review and the commit history.
+
+**9. `dev:cron` change is drive-by**
+
+Changing `ts-node` to `npx tsx` in `package.json` is unrelated to cache status. Separate commit at minimum, separate PR ideally.
+
+**10. Migration comment is slightly misleading**
+
+```sql
+-- Add the column with a default value to safely handle existing rows
+ALTER TABLE "CalendarCache" ADD COLUMN "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT NOW();
+```
+
+`DEFAULT NOW()` means all existing rows get the migration timestamp, not their actual cache time. The comment says "safely handle" but doesn't clarify that existing cache entries will show a misleading "last updated" time. Consider whether this matters for UX — users might see a cache timestamp that's actually just "when we ran the migration."
+
+---
+
+### Summary
+
+| Priority | Issue |
+|----------|-------|
+| **Must** | Verify auth check in `deleteCache.handler` matches existing patterns |
+| **Must** | Don't pass empty `{}` to `updateMany` — be explicit |
+| **Must** | Clarify source of truth for cache timestamp (CalendarCache vs SelectedCalendar) |
+| **Should** | Fix hardcoded `"en-US"` locale |
+| **Should** | Remove `googleChannelId` from generic type if unused |
+| **Should** | Handle mutation loading/error states in confirmation dialogs |
+| **Should** | Drop the Google-specific type check for cache display |
+| **Nit** | Remove unrelated script and `dev:cron` change from this PR |
+
+The core idea is sound and the repository layer work is solid. But the authorization story and the dual-write to cache timestamps need to be sorted before this ships.

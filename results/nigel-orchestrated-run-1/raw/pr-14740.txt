@@ -1,0 +1,140 @@
+# Code Review: PR #14740 -- Add Guest Management to Existing Bookings
+
+## Overall Assessment: This needs serious work.
+
+The bones of this feature are correct -- handler structure follows established patterns, email templates properly extend base classes, lazy loading for MultiEmail is thoughtful, and router integration is clean. But there's a critical authorization bug, missing business rule guards, duplicate validation logic that will drift, and a pattern of "close enough" implementations that ignore how the rest of the codebase does things.
+
+---
+
+## CRITICAL -- Authorization Logic Bug
+
+**File:** `packages/trpc/server/routers/viewer/bookings/addGuests.handler.ts`
+
+```typescript
+const isTeamAdminOrOwner =
+    (await isTeamAdmin(user.id, booking.eventType?.teamId ?? 0)) &&
+    (await isTeamOwner(user.id, booking.eventType?.teamId ?? 0));
+```
+
+Uses `&&` (AND) instead of `||` (OR). As written, `isTeamAdminOrOwner` is only `true` if the user is **both** a team admin **and** a team owner simultaneously. An admin who isn't an owner is silently excluded. Should be `||`.
+
+Additionally, when `booking.eventType?.teamId` is null/undefined, `0` is passed to both functions. A teamId of 0 almost certainly doesn't exist -- this needs a proper null check and early skip.
+
+**Impact:** Security hole. Team admins are blocked from a feature they should have access to.
+
+---
+
+## MAJOR -- Missing Business Rule Guards
+
+**File:** `packages/trpc/server/routers/viewer/bookings/addGuests.handler.ts`
+
+No check for:
+
+1. **Booking status** -- You can add guests to a cancelled or rejected booking. The handler never inspects `booking.status`.
+2. **Past bookings** -- You can add guests to a booking that ended months ago. No `startTime > now()` guard.
+3. **`eventType.guestsEnabled`** -- Cal.com has a feature flag on event types controlling whether guests are allowed. This handler ignores it entirely, bypassing the organizer's explicit setting.
+
+---
+
+## MAJOR -- Duplicate Validation Schema
+
+**Client-side** (`AddGuestsDialog.tsx`):
+```typescript
+const ZAddGuestsInputSchema = z.array(z.string().email()).refine(/* uniqueness */);
+```
+
+**Server-side** (`addGuests.schema.ts`):
+```typescript
+export const ZAddGuestsInputSchema = z.object({
+  bookingId: z.number(),
+  guests: z.array(z.string().email()),
+});
+```
+
+Two schemas, different files, **different rules**. Client checks uniqueness, server doesn't. Client-side schema is also recreated on every render (declared inside the component body). The uniqueness check belongs in the shared schema; the dialog should import from there.
+
+---
+
+## MAJOR -- Email Comparison Without Case Normalization
+
+```typescript
+const uniqueGuests = guests.filter(
+    (guest) => !booking.attendees.some((attendee) => guest === attendee.email) &&
+               !blacklistedGuestEmails.includes(guest)
+);
+```
+
+Emails are case-insensitive per RFC 5321. `John@Example.com` vs `john@example.com` passes the duplicate check, creating a duplicate attendee. The blacklist `.toLowerCase()`s its entries but the incoming `guest` is never lowercased -- so `BLOCKED@EXAMPLE.COM` slips past.
+
+---
+
+## MAJOR -- Missing Organization Email Settings
+
+`sendLocationChangeEmails` (the established pattern) checks organization email settings, `eventTypeDisableHostEmail`, and `shouldSkipAttendeeEmailWithSettings`. The new `sendAddGuestsEmails` does none of this -- it unconditionally sends to everyone, breaking configurations customers have explicitly set.
+
+---
+
+## MODERATE -- Silently Swallowed Error
+
+```typescript
+try {
+    await sendAddGuestsEmails(evt, guests);
+} catch (err) {
+    console.log("Error sending AddGuestsEmails");
+}
+```
+
+`console.log`, not `console.error`. The `err` object is captured then completely ignored. Zero diagnostic information in logs.
+
+---
+
+## MODERATE -- CalendarEvent Construction Duplication
+
+The 40+ line `evt: CalendarEvent` block is nearly identical to `editLocation.handler.ts`. Same attendee list construction, same organizer assembly, same destinationCalendar ternary chain. This is a textbook case for a shared `buildCalendarEventFromBooking()` utility.
+
+---
+
+## MODERATE -- MultiEmail Component Issues
+
+- **Parameter mutation:** `value = value || []` reassigns a destructured prop
+- **`key={index}` anti-pattern:** Items can be added/removed, so index keys cause inputs to "shift" incorrectly when deleting
+- **Hardcoded English:** `<Tooltip content="Remove email">` in a fully-localized codebase
+
+---
+
+## MINOR -- Naming Inconsistency
+
+`id: "add_members"` and `data-testid="add_members"` -- but this feature is about **guests**, not members. These are different concepts in cal.com. Will mislead anyone searching the codebase.
+
+---
+
+## MINOR -- Unnecessary Defensive Patterns
+
+- `startTime` and `endTime` are non-nullable on Booking -- the ternaries are dead code
+- `"Nameless"` is a magic string that should be a translation key or constant
+
+---
+
+## Prioritized Recommendations
+
+### Must Fix (blocking)
+1. Fix `&&` to `||` in authorization check
+2. Add booking status guard (reject cancelled/rejected)
+3. Add past booking guard
+4. Check `eventType.guestsEnabled`
+5. Normalize all email comparisons to lowercase
+6. Add organization email settings checks to `sendAddGuestsEmails`
+
+### Should Fix (significant quality)
+7. Consolidate validation schema -- single source of truth
+8. Log the actual error object in the catch block
+9. Extract CalendarEvent construction into shared utility
+10. Fix `key={index}` with stable identifiers
+11. Rename `add_members` to `add_guests`
+
+### Nitpicks
+12. Stop reassigning the `value` prop in MultiEmail
+13. Localize the "Remove email" tooltip
+14. Remove vague "40kb" comment or measure it
+15. Remove dead ternaries on non-nullable fields
+16. Replace "Nameless" magic string

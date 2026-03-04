@@ -1,0 +1,8 @@
+{
+  "issues": [
+    "The OR branch that deletes reminders where retryCount > 1 has no method filter, so any WorkflowReminder (email, whatsapp, etc.) with retryCount > 1 gets deleted by the SMS cron job instead of only deleting SMS reminders.",
+    "The retryCount threshold of 1 is a magic number buried in a query predicate with no explanation of why that value was chosen. It should be extracted into a named constant like MAX_SMS_RETRY_ATTEMPTS.",
+    "The prisma.workflowReminder.update call for incrementing retryCount is duplicated in both the else branch and the catch block. If the else branch's update throws, the catch fires and retries with the same stale value, which only works correctly by accident.",
+    "The inline type assertion casting the query result as (PartialWorkflowReminder & { retryCount: number })[] is an ad-hoc type widening. The PartialWorkflowReminder type or select object should be updated to include retryCount properly instead of using inline intersection types that don't scale."
+  ]
+}

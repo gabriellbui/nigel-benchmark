@@ -1,0 +1,40 @@
+{
+  "matches": [
+    {
+      "bug_idx": 1,
+      "match": true,
+      "confidence": 0.99,
+      "evidence": "This requires someone to be **both** admin AND owner. That's almost certainly wrong \u2014 you want `||`. As written, a team admin who isn't the owner gets denied. The variable name literally says \"AdminOrOwner\" while the logic says \"AdminAndOwner.\"",
+      "reasoning": "The review explicitly identifies the exact defect: the AND (&&) operator should be OR (||) in the team admin/owner permission check, matching the golden bug precisely."
+    },
+    {
+      "bug_idx": 0,
+      "match": false,
+      "confidence": 0.95,
+      "evidence": "",
+      "reasoning": "The review discusses many issues including email validation, duplicate schemas, and uniqueness checks, but never mentions case sensitivity in email handling or any blacklist/blocklist bypass vulnerability."
+    },
+    {
+      "bug_idx": 2,
+      "match": false,
+      "confidence": 0.95,
+      "evidence": "",
+      "reasoning": "The review does not identify the defect that existing attendees included in the input are passed to the email sender as new guests, causing incorrect notification emails; none of the 13 issues raised address this specific email-sending logic problem."
+    },
+    {
+      "bug_idx": 4,
+      "match": true,
+      "confidence": 0.9,
+      "evidence": "You initialize with [\"\"] \u2014 an array containing one empty string \u2014 which means the empty string check in handleAdd (multiEmailValue.length === 0) will never trigger, because length is always at least 1. The validation still catches it via .email(), but the intent is muddy.",
+      "reasoning": "The review identifies the same defect: initializing state with [\"\"] instead of an empty array causes validation logic issues, matching the golden bug's concern about starting with an array containing an empty string causing validation issues."
+    },
+    {
+      "bug_idx": 3,
+      "match": true,
+      "confidence": 0.72,
+      "evidence": "The server schema validates { bookingId, guests }, the client schema validates just the email array with a uniqueness refinement the server doesn't have. Pick one source of truth. The uniqueness check should live on the server schema too.",
+      "reasoning": "The review identifies that the server lacks duplicate email validation that only exists on the client, which is the same root cause as the golden bug (uniqueGuests not deduplicating within the input), though it frames it as a schema consolidation issue rather than explicitly calling out duplicate attendee row insertion via createMany."
+    }
+  ],
+  "bugs": 5
+}

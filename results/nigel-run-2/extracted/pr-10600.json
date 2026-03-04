@@ -1,0 +1,18 @@
+{
+  "issues": [
+    "Backup codes are generated and stored in the database during the setup step before the user has confirmed the TOTP code and enabled 2FA. If a user starts setup but never completes it, backup codes exist in the database tied to a twoFactorEnabled: false account. Codes should only be generated after TOTP verification in the enable step.",
+    "Backup codes are sent in plaintext in the setup API response before 2FA is even enabled, exposing them over the wire and in browser memory for a security feature that isn't yet active.",
+    "In the disable flow, the used backup code is not immediately invalidated after verification. Between the backup code check and the database update there is no transactional guarantee, so if the request fails partway through the used code remains valid. The login flow correctly removes the used code immediately but the disable flow does not.",
+    "There is no rate limiting on backup code attempts in either the login flow or the disable flow. While brute force is impractical given the keyspace, backup code attempts should be rate-limited separately from normal login attempts.",
+    "Backup code verification logic is duplicated between next-auth-options.ts (login) and disable.ts (disable). Both perform the same decrypt, parse JSON, strip dashes, indexOf, and error handling sequence. This should be extracted into a shared utility to avoid the two implementations getting out of sync.",
+    "The backupCodes state in EnableTwoFactorModal.tsx is initialized with useState([]) without a type annotation, which infers never[]. It should be useState<string[]>([]).",
+    "The formatBackupCode function is defined inside the component in EnableTwoFactorModal.tsx, causing it to be recreated on every render. It is a pure function with no dependencies on component state and should be pulled out of the component.",
+    "There is a potential Blob URL memory leak in EnableTwoFactorModal.tsx. The existing URL is revoked before setting a new one, but there is no cleanup on unmount. If the component unmounts while a URL exists, it leaks.",
+    "The nested ternary in login.tsx ({twoFactorRequired ? !twoFactorLostAccess ? <TwoFactor center /> : <BackupCode center /> : null}) is difficult to read. It should be broken into a variable or use if blocks.",
+    "The BackupCode.tsx file exports a function named TwoFactor instead of BackupCode. This causes confusion in stack traces and React DevTools since two different components share the same function name.",
+    "Used backup codes are replaced with null in the array rather than being removed, creating a heterogeneous (string | null)[] array stored as encrypted JSON. This requires filtering nulls everywhere when counting or displaying remaining codes. Use splice or filter instead.",
+    "The resetForm helper in DisableTwoFactorModal.tsx uses form.setValue three times instead of form.reset(). If more fields are added later, someone will forget to add them here.",
+    "The test file has TODO and FIXME comments shipped in the PR. The TODOs for check file content and check clipboard content suggest the tests are incomplete.",
+    "The tabIndex={-1} change on the password visibility toggle in Input.tsx is unrelated to backup codes and should be a separate commit or PR for clean history."
+  ]
+}

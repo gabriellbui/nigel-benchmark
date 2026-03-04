@@ -1,0 +1,19 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.99,
+      "evidence": "forEach with async callbacks doesn't await anything. These promises are floating. If any of them fail, you'll get unhandled promise rejections... Now the DB operations are inside the fire-and-forget too, so you can silently fail to clean up reminder records. This pattern appears in multiple places across the diff \u2014 handleCancelBooking.ts, bookings.tsx, workflows.tsx. None of the forEach loops await the delete calls.",
+      "reasoning": "The review explicitly identifies the same root cause: deleteScheduledEmailReminder and deleteScheduledSMSReminder called without await inside forEach loops, meaning reminder cancellations are fire-and-forget and may silently fail."
+    },
+    {
+      "bug_idx": 1,
+      "match": true,
+      "confidence": 0.98,
+      "evidence": "Why does cancelling an email with `immediateDelete: true` skip the DB deletion? That's a leaked record waiting to happen... Reminders cancelled with `immediateDelete: true` from workflow/step deletion will have their SendGrid batch cancelled but the `WorkflowReminder` row will persist forever.",
+      "reasoning": "The review explicitly identifies the same defect: the immediateDelete:true path in deleteScheduledEmailReminder cancels SendGrid but never deletes the WorkflowReminder DB record, creating orphaned rows."
+    }
+  ],
+  "bugs": 2
+}

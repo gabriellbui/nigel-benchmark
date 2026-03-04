@@ -1,0 +1,14 @@
+{
+  "issues": [
+    "The `immediateDelete: true` path in `deleteScheduledEmailReminder` cancels via SendGrid but never deletes the DB record or sets `cancelled: true`, so `WorkflowReminder` rows will persist forever since the cron job only cleans up records marked `cancelled: true`.",
+    "The `cancelled` column is added as a nullable boolean with no default value, creating a confusing state matrix with the existing `scheduled` boolean. It should be non-nullable with `DEFAULT false` to avoid `null` vs `false` truthiness inconsistencies in JS.",
+    "Multiple places use `forEach` with `async` callbacks (in `workflows.tsx`, `handleCancelBooking.ts`, `bookings.tsx`, `handleNewBooking.ts`), which does not await the promises. These fire-and-forget calls silently drop errors and can fail to clean up reminder records.",
+    "The old authorization check that scoped reminder deletion to the current user's bookings (`booking: { userId: ctx.user.id }`) was removed. The new delete functions delete by `id` alone, removing the defense-in-depth authorization boundary.",
+    "The try/catch in `handleNewBooking.ts` wraps a `forEach` with async callbacks, so it will never catch errors from the async operations. The error handling is ineffective.",
+    "In `scheduleEmailReminders.ts`, errors in the cron job are logged with `console.log` instead of a proper logger like `log.error`. Additionally, if the SendGrid cancel call fails midway through the loop, some reminders are cancelled but none of the DB records are deleted, creating a partial failure state with no recovery path.",
+    "Email and SMS reminder deletion have inconsistent strategies: `deleteScheduledEmailReminder` has three branching code paths with different DB cleanup behaviors, while `deleteScheduledSMSReminder` always cancels via Twilio and deletes the DB record. They should have the same contract around DB cleanup.",
+    "The `WorkflowStepContainer.tsx` change replaces `(isPhoneNumberNeeded || isSenderIdNeeded)` with just `isPhoneNumberNeeded`, silently dropping sender ID UI support. If intentional, it's undocumented; if accidental, it's a regression.",
+    "The bottom ~60 lines of `workflows.tsx` have mangled indentation, likely a merge artifact or editor issue, making the code harder to read and prone to causing merge conflicts.",
+    "The function signature `(reminderId: number, referenceId: string | null, immediateDelete?: boolean)` uses three parameters to control branching behavior, which is a code smell. Consider separate functions or an options object."
+  ]
+}

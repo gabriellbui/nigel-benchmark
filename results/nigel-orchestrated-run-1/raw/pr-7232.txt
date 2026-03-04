@@ -1,0 +1,173 @@
+# Code Review: PR #7232 — "Comprehensive workflow reminder management for booking lifecycle events"
+
+## Overall Assessment: This needs work. Significantly.
+
+The intent is sound — moving from immediate hard deletes to a soft-cancel pattern with deferred cleanup is the right architectural direction. The old code left orphaned records when `referenceId` was null, and this PR addresses that. But the execution has two genuine bugs, a systemic async handling problem copied across the entire PR, and design inconsistencies that smell like this was written in one pass without stepping back to think about the contract these functions expose.
+
+---
+
+## 1. CRITICAL BUG: `immediateDelete` path orphans database records
+
+**File:** `packages/features/ee/workflows/lib/reminders/emailReminderManager.ts`
+
+```typescript
+if (immediateDelete) {
+  await client.request({
+    url: "/v3/user/scheduled_sends",
+    method: "POST",
+    body: {
+      batch_id: referenceId,
+      status: "cancel",
+    },
+  });
+  return;  // <--- Returns here. No DB cleanup. Ever.
+}
+```
+
+When `immediateDelete` is `true`, this function cancels the SendGrid scheduled send and then... just returns. The `WorkflowReminder` record is never deleted from the database, never marked `cancelled`, nothing. It's a ghost row that will sit in the database forever.
+
+This path is invoked during:
+- **Booking reschedule** (`handleNewBooking.ts`)
+- **Workflow deletion** (`workflows.tsx`)
+- **Workflow step deletion** (`workflows.tsx`)
+
+Three of the most common lifecycle operations producing orphaned rows. The cron job only picks up records where `cancelled: true`, so these orphans will never be cleaned up.
+
+Additionally, the old code called the SendGrid DELETE endpoint (`/v3/user/scheduled_sends/${referenceId}`) after the cancel POST. That call is entirely gone now — leaving SendGrid resources hanging too.
+
+---
+
+## 2. CRITICAL BUG: Fire-and-forget async in `forEach`
+
+This is plastered across the entire PR. Every call site uses `forEach` to invoke async deletion functions without awaiting them.
+
+**`handleCancelBooking.ts`:**
+```typescript
+updatedBookings.forEach((booking) => {
+  booking.workflowReminders.forEach((reminder) => {
+    deleteScheduledEmailReminder(reminder.id, reminder.referenceId); // async, not awaited
+  });
+});
+```
+
+**`workflows.tsx`:**
+```typescript
+remindersToUpdate.forEach(async (reminder) => {  // `.forEach(async ...)` -- the classic footgun
+  deleteScheduledEmailReminder(reminder.id, reminder.referenceId);
+});
+```
+
+The `try/catch` in `handleNewBooking.ts` around the `forEach` block is particularly misleading — it gives the illusion of error handling but will never catch anything because the promises are already dispatched and forgotten.
+
+The old code at least collected Prisma deletions into arrays and awaited them via `Promise.all`. This PR removed that safety net while keeping fire-and-forget, making it strictly worse for DB operations.
+
+**Fix:** Use `Promise.all` with `.map()`:
+```typescript
+await Promise.all(
+  reminders.map((reminder) =>
+    reminder.method === WorkflowMethods.EMAIL
+      ? deleteScheduledEmailReminder(reminder.id, reminder.referenceId)
+      : deleteScheduledSMSReminder(reminder.id, reminder.referenceId)
+  )
+);
+```
+
+---
+
+## 3. DESIGN ISSUE: Cron job lacks null-safety on `referenceId`
+
+**File:** `packages/features/ee/workflows/api/scheduleEmailReminders.ts`
+
+```typescript
+for (const reminder of remindersToCancel) {
+  await client.request({
+    body: {
+      batch_id: reminder.referenceId,  // Could be null!
+      status: "cancel",
+    },
+  });
+```
+
+Deferred cancellation can be set for reminders with `referenceId: null`. The cron job unconditionally sends `referenceId` as a `batch_id` to SendGrid. A single null blows up the entire batch because the `for` loop is sequential inside a single `try/catch`.
+
+---
+
+## 4. DESIGN ISSUE: Asymmetric cancellation strategies with no clear contract
+
+- `deleteScheduledEmailReminder(id, ref)` → soft cancel (marks `cancelled: true`)
+- `deleteScheduledEmailReminder(id, ref, true)` → immediate cancel (calls SendGrid, then nothing)
+- `deleteScheduledSMSReminder(id, ref)` → always hard delete
+
+A boolean `immediateDelete` flag is the weakest possible way to communicate intent. Every developer who calls these functions has to read the implementation to understand the behavior. Consider an enum or separate functions (`cancelEmailReminderDeferred` / `cancelEmailReminderImmediate`).
+
+---
+
+## 5. DESIGN ISSUE: Lost authorization check
+
+**File:** `packages/trpc/server/routers/viewer/workflows.tsx` (disabled event types path)
+
+Old code had defense-in-depth:
+```typescript
+const deleteReminder = ctx.prisma.workflowReminder.deleteMany({
+  where: { id: reminder.id, booking: { userId: ctx.user.id } },  // Auth check
+});
+```
+
+New code just calls `deleteScheduledEmailReminder(reminder.id, ...)` with no user ownership check on the write operation. The IDs are fetched in a user-scoped query, but removing the second check without comment is a silent regression in security posture.
+
+---
+
+## 6. Comment quality: Mostly noise
+
+Every new comment restates the code:
+```
+//cancel workflow reminders of deleted workflow
+// cancel all workflow reminders from deleted steps
+//cancel all workflow reminders from steps that were edited
+```
+
+None explain *why*. Why does booking cancel use deferred while reschedule uses immediate? Why does SMS always hard-delete while email has two strategies? Those are the questions that will confuse the next developer.
+
+---
+
+## 7. NITPICK: Indentation carnage in `workflows.tsx`
+
+Lines ~901-963 have completely mangled indentation — everything left-aligned instead of properly indented. This will cause noise in git blame forever.
+
+---
+
+## 8. NITPICK: `WorkflowStepContainer.tsx` — silent behavior change
+
+The condition changed from `(isPhoneNumberNeeded || isSenderIdNeeded)` to just `isPhoneNumberNeeded`, silently dropping the `isSenderIdNeeded` case. If sender ID configuration exists as a feature, this breaks it. This is orthogonal to reminder cancellation and belongs in a separate PR.
+
+---
+
+## Prioritized Recommendations
+
+### Must Change (blocking)
+
+| # | Issue | Impact |
+|---|-------|--------|
+| 1 | **`immediateDelete` path** must delete the DB record after canceling SendGrid | Orphaned rows on every reschedule, workflow deletion, and step deletion |
+| 2 | **Replace `forEach` with `Promise.all(map(...))`** across all call sites | Silent failures, race conditions, request handlers returning before cleanup completes |
+| 3 | **Null check `referenceId`** in cron job cancellation loop | Single null blows up entire batch processing |
+
+### Should Change (maintainability)
+
+| # | Issue |
+|---|-------|
+| 4 | Document the deferred vs. immediate cancellation strategy and why email/SMS differ |
+| 5 | Address or document the removed authorization check on reminder deletion |
+| 6 | Replace boolean `immediateDelete` flag with a clearer API (enum or separate functions) |
+
+### Nitpick
+
+| # | Issue |
+|---|-------|
+| 7 | Fix indentation damage in `workflows.tsx` |
+| 8 | Separate the `WorkflowStepContainer.tsx` UI changes into their own PR |
+| 9 | Replace "what" comments with "why" comments |
+
+---
+
+This PR fixes a real problem (orphaned records when `referenceId` is null), but introduces new bugs in the process. The `immediateDelete` path creating orphans is particularly ironic given that the stated goal is to *stop* creating orphans. Ship it after fixing items 1-3.

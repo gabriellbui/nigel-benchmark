@@ -1,0 +1,147 @@
+## This needs work.
+
+There's a well-intentioned feature here — letting self-hosters sync OAuth credentials from a parent application — but the execution has several problems ranging from security issues to broken abstractions to code that simply doesn't do what it thinks it does.
+
+---
+
+### Critical Issues
+
+**1. `parseRefreshTokenResponse.ts` — The Zod schema is nonsense**
+
+```ts
+const minimumTokenResponseSchema = z.object({
+  access_token: z.string(),
+  [z.string().toString()]: z.number(),
+  [z.string().optional().toString()]: z.unknown().optional(),
+});
+```
+
+`z.string().toString()` evaluates to `"ZodString"` — a literal string key. This schema defines a property literally named `"ZodString"` of type `z.number()`, and another property literally named `"ZodOptional"` of type `z.unknown().optional()`. This does **not** create a dynamic catch-all schema. It validates nothing useful beyond `access_token`. If the author wanted a passthrough schema with a required `access_token`, they should use `z.object({ access_token: z.string() }).passthrough()`.
+
+**2. `parseRefreshTokenResponse.ts` — Silent mutation of response data**
+
+```ts
+if (!refreshTokenResponse.data.refresh_token) {
+  refreshTokenResponse.data.refresh_token = "refresh_token";
+}
+```
+
+If there's no refresh token, it injects the literal string `"refresh_token"` as the token value. This is a magic placeholder that will silently break on the next refresh cycle when the app tries to use this garbage value against the OAuth provider. If credential sharing means refresh tokens aren't needed, make that explicit in the type system — don't stuff sentinel values into the data.
+
+**3. Webhook endpoint — Timing-safe comparison missing**
+
+`app-credential.ts:25-28`:
+```ts
+if (
+  req.headers[process.env.CALCOM_WEBHOOK_HEADER_NAME || "calcom-webhook-secret"] !==
+  process.env.CALCOM_WEBHOOK_SECRET
+) {
+```
+
+String comparison with `!==` for secret validation is vulnerable to timing attacks. Use `crypto.timingSafeEqual()`. This is a webhook that accepts encrypted credentials — getting auth wrong here is not a minor thing.
+
+**4. Webhook endpoint — Decryption with empty string fallback**
+
+`app-credential.ts:57-59`:
+```ts
+const keys = JSON.parse(
+  symmetricDecrypt(reqBody.keys, process.env.CALCOM_APP_CREDENTIAL_ENCRYPTION_KEY || "")
+);
+```
+
+If the env var is missing, this passes an empty string to `symmetricDecrypt`. Either it throws a cryptic error from the crypto lib, or worse, it somehow succeeds with a weak/empty key. The feature flag `APP_CREDENTIAL_SHARING_ENABLED` checks for the key's existence, but there's nothing preventing this code path from being reached with a missing key if someone misconfigures things. Fail explicitly.
+
+---
+
+### Design Issues
+
+**5. `refreshOAuthTokens` — Leaky abstraction that doesn't abstract enough**
+
+The function signature is `(refreshFunction, appSlug, userId)` and it either calls the refresh function or hits a sync endpoint. But every caller still has to:
+- Wrap their existing refresh logic in a lambda
+- Pass `appSlug` as a magic string
+- Know about `credential.userId`
+
+And the abstraction doesn't handle the response normalization — callers still process the response differently. This is the worst of both worlds: it adds indirection without removing complexity. The callers are now *harder* to read because the actual refresh logic is buried inside a lambda parameter.
+
+**6. `APP_CREDENTIAL_SHARING_ENABLED` is a truthy check, not a boolean**
+
+`packages/lib/constants.ts`:
+```ts
+export const APP_CREDENTIAL_SHARING_ENABLED =
+  process.env.CALCOM_WEBHOOK_SECRET && process.env.CALCOM_APP_CREDENTIAL_ENCRYPTION_KEY;
+```
+
+This evaluates to `string | undefined`, not `boolean`. It "works" due to JS truthiness, but it means `APP_CREDENTIAL_SHARING_ENABLED` could be the actual secret string if both are set. Wrap it in `Boolean()` or use `!!`. Don't leak secrets into a constant that gets imported everywhere.
+
+**7. Inconsistent application of `parseRefreshTokenResponse`**
+
+Used in Google Calendar, Office365 Calendar, Zoom, and Salesforce — but **not** in HubSpot, Lark, Webex, Zoho Bigin, or Zoho CRM, which only got `refreshOAuthTokens`. If these two utilities are meant to be used together as part of this credential sync feature, apply them consistently or document why some integrations need one but not the other.
+
+**8. Salesforce gets a completely different treatment**
+
+`salesforce/lib/CalendarService.ts` adds a manual `fetch` + `parseRefreshTokenResponse` block but doesn't use `refreshOAuthTokens` at all. Every other integration wraps its refresh in `refreshOAuthTokens`. Why is Salesforce special? This looks like someone ran out of steam halfway through.
+
+**9. Office365 Calendar silently swallows errors now**
+
+The old code had:
+```ts
+if (!tokenResponse.success) {
+  console.error("Outlook error grabbing new tokens ~ zodError:", ...);
+}
+```
+
+The new code removes this entirely. `parseRefreshTokenResponse` throws on parse failure, but the caller still uses `tokenResponse.success` on the next line (`o365AuthCredentials = { ...o365AuthCredentials, ...(tokenResponse.success && tokenResponse.data) }`). If `parseRefreshTokenResponse` throws, this line is never reached. If it doesn't throw... well, it always does on failure. The control flow here is confused.
+
+---
+
+### Minor Issues
+
+**10. Empty JSDoc comment**
+
+`app-credential.ts:16`:
+```ts
+/** */
+export default async function handler(...)
+```
+
+Either write a doc comment or don't. An empty `/** */` is just noise.
+
+**11. No HTTP method check on webhook endpoint**
+
+The webhook handler doesn't verify `req.method === "POST"`. Any HTTP method will be accepted.
+
+**12. `zoho-bigin/api/add.ts` — Hardcoded slug replacing dynamic one**
+
+```ts
+- const redirectUri = WEBAPP_URL + `/api/integrations/${appConfig.slug}/callback`;
++ const redirectUri = WEBAPP_URL + `/api/integrations/zoho-bigin/callback`;
+```
+
+This went from dynamic to hardcoded. If this was a bug fix (maybe `appConfig.slug` had a different value), fine, but it's an undocumented behavioral change mixed into a refactoring PR.
+
+**13. File reorganization adds churn for minimal benefit**
+
+Moving `encodeOAuthState`, `decodeOAuthState`, and `createOAuthAppCredential` into an `oauth/` subdirectory touches ~20 files for what amounts to a folder rename. The new utilities (`refreshOAuthTokens`, `parseRefreshTokenResponse`) could have lived alongside the existing files without this reorganization.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix:**
+1. Fix the broken Zod schema in `parseRefreshTokenResponse` — it validates nothing
+2. Replace the `"refresh_token"` sentinel value with proper handling
+3. Use timing-safe comparison for webhook secret validation
+4. Add explicit failure on missing encryption key instead of empty string fallback
+5. Add HTTP method check to webhook endpoint
+
+**Should fix:**
+6. Make `APP_CREDENTIAL_SHARING_ENABLED` a proper boolean
+7. Apply `parseRefreshTokenResponse` consistently or document why some integrations skip it
+8. Bring Salesforce in line with the `refreshOAuthTokens` pattern
+9. Fix the Office365 error handling regression
+
+**Nitpicks:**
+10. Remove the empty JSDoc
+11. Document the zoho-bigin slug change
+12. Consider whether the file reorganization is worth the churn

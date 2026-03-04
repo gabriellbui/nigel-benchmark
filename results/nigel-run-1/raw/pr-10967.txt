@@ -1,0 +1,168 @@
+**This needs work.** The intent is sound — supporting multiple destination calendars for collective event types — but the execution is sloppy and introduces real bugs alongside a lot of unnecessary churn.
+
+---
+
+## Critical Bugs
+
+### 1. Dead code in `updateEvent` and `deleteEvent` (Google Calendar)
+
+`packages/app-store/googlecalendar/lib/CalendarService.ts`
+
+```js
+// updateEvent
+const selectedCalendar = externalCalendarId
+  ? externalCalendarId
+  : event.destinationCalendar?.find((cal) => cal.externalId === externalCalendarId)?.externalId;
+
+// deleteEvent
+const calendarId = externalCalendarId
+  ? externalCalendarId
+  : event.destinationCalendar?.find((cal) => cal.externalId === externalCalendarId)?.externalId;
+```
+
+Both the `updateEvent` and `deleteEvent` fallback branches are logically dead. If `externalCalendarId` is falsy, you enter the else branch and then search for a calendar where `cal.externalId === externalCalendarId` — which is falsy. So `find` will never match anything. This always resolves to `undefined`. Before this PR, at least the fallback returned the destination calendar's externalId. Now it silently returns nothing. This is a regression.
+
+### 2. Null dereference in `EventManager.ts`
+
+```js
+const [mainHostDestinationCalendar] = evt.destinationCalendar ?? [];
+if (evt.location === MeetLocationType && mainHostDestinationCalendar.integration !== "google_calendar") {
+```
+
+If `destinationCalendar` is an empty array `[]`, destructuring yields `undefined`, and then you access `.integration` on `undefined`. Boom. The old code at least had optional chaining. This line needs `mainHostDestinationCalendar?.integration`.
+
+---
+
+## Design Issues
+
+### 3. Copy-pasted credential fetching from DB — twice
+
+In `EventManager.ts`, the exact same "fetch credential from DB if not found locally" block appears in both `createAllCalendarEvents` and the update/reschedule path. It's ~20 lines of identical Prisma query + object mapping, duplicated verbatim:
+
+```js
+const credentialFromDB = await prisma.credential.findUnique({
+  include: { app: { select: { slug: true } } },
+  where: { id: destination.credentialId },
+});
+if (credentialFromDB && credentialFromDB.app?.slug) {
+  credential = {
+    appName: credentialFromDB?.app.slug ?? "",
+    id: credentialFromDB.id,
+    // ... same shape both times
+  };
+}
+```
+
+Extract this into a private method like `getCredentialById(id: number)`. This is textbook "I'll just copy it" territory.
+
+### 4. The wrapping pattern is repeated ~8 times with no helper
+
+Throughout the codebase, you see this identical ternary in every file that constructs a `CalendarEvent`:
+
+```js
+destinationCalendar: booking.destinationCalendar
+  ? [booking.destinationCalendar]
+  : user.destinationCalendar
+  ? [user.destinationCalendar]
+  : []
+```
+
+This appears in `handleCancelBooking.ts` (twice), `paypal-webhook.ts`, `webhook.ts` (twice), `deleteCredential.handler.ts`, `confirm.handler.ts`, `editLocation.handler.ts`, and `requestReschedule.handler.ts`. That's a helper function begging to exist:
+
+```ts
+function toDestinationCalendarArray(...calendars: (DestinationCalendar | null | undefined)[]): DestinationCalendar[] {
+  const found = calendars.find(Boolean);
+  return found ? [found] : [];
+}
+```
+
+One function, used everywhere. Instead you have 8 copy-pasted ternary chains that'll drift apart over time.
+
+### 5. `createEvent` signature change breaks the interface contract inconsistently
+
+`Calendar.d.ts` now requires `credentialId` as a mandatory parameter:
+
+```ts
+createEvent(event: CalendarEvent, credentialId: number): Promise<NewCalendarEventType>;
+```
+
+But `LarkCalendarService.createEvent` and `Office365CalendarService.createEvent` don't accept it. So either those implementations will fail at compile time (good, you'll catch it) or they silently ignore it (bad — it means the type system isn't enforcing what you think). The `BaseCalendarService` in `CalendarService.ts` also doesn't accept it. If you're going to change an interface, update *all* implementors.
+
+### 6. `mainHostDestinationCalendar` extraction pattern repeated everywhere
+
+Every calendar service now has its own copy of:
+
+```js
+const [mainHostDestinationCalendar] = event.destinationCalendar ?? [];
+```
+
+This appears in Google Calendar (twice — create and update), Lark Calendar (four times), Office365, BaseCalendarService (twice), BrokenIntegrationEmail, and EventManager. That's a concept that should live on the `CalendarEvent` type or as a utility, not destructured ad-hoc in 10+ locations.
+
+---
+
+## Suspicious Changes
+
+### 7. Unrelated `loadUsers` rewrite in `handleNewBooking.ts`
+
+The `loadUsers` function was refactored from a concise ternary chain into a verbose try/catch with redundant error handling — and it *removed* the `organization` select that was previously there. That's a behavioral change unrelated to destination calendars, and removing `organization.slug` from the query could break downstream code that depends on it.
+
+The new error handling also catches `PrismaClientKnownRequestError` and wraps it in `HttpError(400)` — but Prisma errors aren't necessarily client errors. A connection failure is a 500, not a 400.
+
+### 8. Unrelated organization creation logic change
+
+```js
+// Before
+...(!IS_TEAM_BILLING_ENABLED && { slug }),
+// After
+...(IS_TEAM_BILLING_ENABLED ? { slug } : {}),
+```
+
+This *inverts the logic*. Before: slug was set when billing was **disabled**. After: slug is set when billing is **enabled**. Either the old code was wrong or this is a regression. Same for `requestedSlug`. This has nothing to do with destination calendars and could silently break organization creation.
+
+### 9. Typo fix smuggled in
+
+`orginalBookingDuration` → `originalBookingDuration` — fine on its own, but keep unrelated changes in separate commits.
+
+---
+
+## Comment Quality
+
+### 10. Orphaned comment
+
+```js
+// Find in calEventRaw.destinationCalendar the one with the same credentialId
+```
+
+Followed by an empty line. This reads like a TODO note someone left for themselves. Either make it a proper explanation or delete it — the code is self-explanatory.
+
+### 11. Comment says one thing, code might do another
+
+```js
+// @NOTE: destinationCalendar it's an array now so as a fallback we will only check the first one
+```
+
+"As a fallback" — fallback for what? This is the *only* behavior, not a fallback. The comment misleads.
+
+---
+
+## Prioritized Recommendations
+
+**Must fix:**
+1. The dead-code bug in Google Calendar's `updateEvent`/`deleteEvent` — this will cause events to not be found on the correct calendar
+2. The null dereference on `mainHostDestinationCalendar.integration` in `EventManager.ts`
+3. Verify the organization creation logic inversion is intentional, not a regression
+
+**Should fix:**
+4. Extract the credential-from-DB lookup into a shared method (duplicated twice)
+5. Extract the `toDestinationCalendarArray` helper (duplicated ~8 times)
+6. Extract `getMainHostDestinationCalendar(event)` utility (duplicated ~10 times)
+7. Update all `Calendar` interface implementors to match the new `createEvent` signature
+8. Put back the `organization` select in `loadUsers` or confirm it's not needed
+
+**Nitpicks:**
+9. Separate unrelated changes (typo fix, org creation logic, loadUsers rewrite) into their own PRs
+10. Clean up orphaned comments
+
+---
+
+**Bottom line:** The core idea — array of destination calendars for collective scheduling — is the right direction. But the execution has real bugs (dead find logic, null deref), a lot of copy-paste that should be abstracted, unrelated changes smuggled in that may introduce regressions, and an interface change that isn't consistently applied. This needs another pass before it's safe to merge.

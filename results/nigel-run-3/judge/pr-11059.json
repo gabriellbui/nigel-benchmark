@@ -1,0 +1,40 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "You're mutating the parsed result to inject a literal string \"refresh_token\" as the refresh token value when one isn't present. This is a magic string that will silently pass validation but fail at runtime when any OAuth provider actually tries to use it.",
+      "reasoning": "Finding #6 identifies the exact same defect: the hardcoded string 'refresh_token' is injected when the real refresh token is missing, which will fail at runtime when OAuth providers try to use it, matching the golden bug's description of breaking subsequent token refreshes."
+    },
+    {
+      "bug_idx": 1,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "This is not how Zod works. `z.string().toString()` produces a string representation of the Zod type definition, not a dynamic property key matcher. This schema does nothing useful beyond checking `access_token` exists. The computed property keys evaluate to static strings like \"ZodString\" \u2014 they don't create catch-all property matchers.",
+      "reasoning": "Issue #5 in the review identifies the exact same defect: computed property keys like [z.string().toString()] in the Zod object schema are invalid/nonsensical and do not function as intended, matching the golden bug's diagnosis of invalid Zod schema syntax with computed property keys."
+    },
+    {
+      "bug_idx": 2,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "The function returns a SafeParseReturnType (the result of .safeParse()), but then the callers use it inconsistently: GoogleCalendarService.ts:96 passes the result directly to prisma.credential.update \u2014 expecting a plain object, not a { success, data } wrapper. The Google Calendar usage looks like it will store { success: true, data: {...} } as the credential key in the database. That's a data corruption bug.",
+      "reasoning": "Finding #7 identifies the exact same defect: parseRefreshTokenResponse returns a safeParse wrapper ({ success, data }) and callers like GoogleCalendarService persist that wrapper object as the credential key instead of the unwrapped .data payload."
+    },
+    {
+      "bug_idx": 3,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "When `APP_CREDENTIAL_SHARING_ENABLED` is true, it returns a `fetch` `Response` object. When false, it returns whatever `refreshFunction()` returns \u2014 which varies wildly across callers (Google returns `GaxiosResponse`, HubSpot returns a `TokenResponseIF`, Lark returns a `Response`, etc.). The callers then proceed to call methods like `.json()` or access `.data` on the result, assuming a specific type... `HubspotCalendarService.ts:186` types the result as `HubspotToken`, but when credential sharing is enabled, it gets a raw `Response` object instead. That's a runtime crash waiting to happen.",
+      "reasoning": "Review issue #8 identifies the exact same defect: refreshOAuthTokens returns a fetch Response when credential sharing is enabled, but callers like GoogleCalendarService and HubspotCalendarService expect their specific token objects, causing runtime type mismatches."
+    },
+    {
+      "bug_idx": 4,
+      "match": true,
+      "confidence": 0.9,
+      "evidence": "When APP_CREDENTIAL_SHARING_ENABLED is true, it returns a fetch Response object. When false, it returns whatever refreshFunction() returns... The callers then proceed to call methods like .json() or access .data on the result, assuming a specific type. This function promises type uniformity but delivers type chaos... That's a runtime crash waiting to happen.",
+      "reasoning": "Review issue #8 identifies the same defect: refreshOAuthTokens returns a fetch Response when the sync endpoint is used, but callers access .data on it (which doesn't exist on fetch Response), causing a runtime crash \u2014 the same root cause as the golden bug."
+    }
+  ],
+  "bugs": 5
+}

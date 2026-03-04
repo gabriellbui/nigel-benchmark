@@ -1,0 +1,99 @@
+## This needs work. There's a legitimate production bug hiding in here.
+
+The intent is sound — converting static imports to dynamic `import()` for code splitting. But the execution has a critical async mistake repeated across multiple files, and the overall approach has a design issue worth discussing.
+
+---
+
+### Critical Bug: `async` callbacks in `.forEach()`
+
+This is a **ship-blocker**. In four separate locations, the code uses `forEach(async (...) => { await ... })`. `forEach` does **not** await returned promises. Every async operation inside fires off into the void — unhandled, unawaited, errors silently swallowed.
+
+**`packages/app-store/vital/lib/reschedule.ts`** and **`packages/app-store/wipemycalother/lib/reschedule.ts`**:
+```js
+bookingRefsFiltered.forEach(async (bookingRef) => {
+  // ...
+  const calendar = await getCalendar(credentialsMap.get(bookingRef.type));
+  return calendar?.deleteEvent(bookingRef.uid, builder.calendarEvent);
+```
+
+**`packages/trpc/server/routers/viewer/bookings.tsx`**:
+```js
+bookingRefsFiltered.forEach(async (bookingRef) => {
+  // ...
+  const calendar = await getCalendar(credentialsMap.get(bookingRef.type));
+  return calendar?.deleteEvent(/* ... */);
+```
+
+**`packages/features/bookings/lib/handleCancelBooking.ts:458`**:
+```js
+.forEach(async (credential) => {
+  const calendar = await getCalendar(credential);
+```
+
+These need to be `for...of` loops (if sequential) or `Promise.all(items.map(async ...))` (if parallel). The `return` inside `forEach` was already a no-op before this PR, but now with `async`, the awaits are completely fire-and-forget. Calendar events won't be reliably deleted during rescheduling. That's a data integrity problem.
+
+Note: the PR *did* correctly convert one `forEach` to `for...of` in `handleCancelBooking.ts:474`. The same treatment needs to be applied everywhere.
+
+---
+
+### Design Issue: Eager Dynamic Imports
+
+```js
+const appStore = {
+  applecalendar: import("./applecalendar"),
+  caldavcalendar: import("./caldavcalendar"),
+  // ...
+};
+```
+
+Every `import()` fires immediately when this module is evaluated. You get ~28 parallel module loads at startup regardless of which integrations a user actually has configured. The promises are created eagerly, not lazily.
+
+If the goal is just bundler code-splitting (separate chunks), this works. If the goal is to avoid loading unused integrations at runtime, it doesn't. A lazy approach would be:
+
+```js
+const appStore = {
+  applecalendar: () => import("./applecalendar"),
+  // ...
+};
+// usage: const app = await appStore[name]();
+```
+
+The PR doesn't state the motivation. If it's purely about chunk splitting for smaller initial bundles, the current approach is fine. If it's about runtime performance, this misses the mark.
+
+---
+
+### Design Smell: Unresolved Promise Stored in Object
+
+In `CalendarManager.ts`, `getCalendarCredentials` is **not** made async. Instead, `calendar` silently becomes a `Promise<Calendar | null>` stored inside the returned object:
+
+```js
+const calendar = getCalendar(credential); // now returns Promise
+return { integration: app, credential, calendar }; // calendar is a Promise
+```
+
+Then later:
+```js
+const calendar = await item.calendar; // consumer must know to await
+```
+
+This creates a hidden contract. The type of `calendar` in that object changed from `Calendar | null` to `Promise<Calendar | null>`, but there's no type enforcement making sure every consumer awaits it. Any existing code that accesses `.calendar` without `await` will silently get a truthy Promise object instead of `null`, breaking null checks.
+
+---
+
+### Stray Whitespace
+
+`packages/core/CalendarManager.ts` — added blank line at line 31 that's just noise. Keep the diff clean.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix:**
+1. Replace all `forEach(async ...)` with `for...of` or `Promise.all(arr.map(async ...))`. This is a live bug — calendar deletions during reschedules will silently fail.
+2. Audit every consumer of `getCalendarCredentials` to ensure they `await` the `.calendar` property. Or better: make `getCalendarCredentials` async and resolve the promises before returning.
+
+**Should fix:**
+3. Clarify (in the PR description at minimum) whether the intent is lazy loading or chunk splitting. If lazy loading, switch to thunks (`() => import(...)`).
+
+**Nitpick:**
+4. Remove the stray blank line in `CalendarManager.ts`.

@@ -1,0 +1,40 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "If `destinationCalendar` is an empty array `[]`, destructuring yields `undefined`, and then you access `.integration` on `undefined`. Boom. The old code at least had optional chaining. This line needs `mainHostDestinationCalendar?.integration`.",
+      "reasoning": "The review explicitly identifies the null dereference on mainHostDestinationCalendar when destinationCalendar is an empty array, which is the same root cause as the golden bug."
+    },
+    {
+      "bug_idx": 3,
+      "match": true,
+      "confidence": 0.95,
+      "evidence": "This *inverts the logic*. Before: slug was set when billing was **disabled**. After: slug is set when billing is **enabled**. Either the old code was wrong or this is a regression. Same for `requestedSlug`.",
+      "reasoning": "The review explicitly identifies the same logic inversion in organization creation where slug is now set when IS_TEAM_BILLING_ENABLED is true instead of false, matching the golden bug's description precisely."
+    },
+    {
+      "bug_idx": 1,
+      "match": false,
+      "confidence": 0.95,
+      "evidence": "",
+      "reasoning": "The golden bug identifies redundant optional chaining (?.integration is unnecessary because a ternary already checks the variable), while the review's Bug #2 identifies the opposite problem \u2014 missing optional chaining causing a null dereference in a different code location (an if-statement, not a ternary); these are different diagnoses about different defects."
+    },
+    {
+      "bug_idx": 4,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "Calendar.d.ts now requires credentialId as a mandatory parameter... But LarkCalendarService.createEvent and Office365CalendarService.createEvent don't accept it... The BaseCalendarService in CalendarService.ts also doesn't accept it. If you're going to change an interface, update *all* implementors.",
+      "reasoning": "The review explicitly identifies the same defect: the Calendar interface's createEvent signature was changed to require credentialId, but Lark and Office365 implementations were not updated, breaking the interface contract."
+    },
+    {
+      "bug_idx": 2,
+      "match": false,
+      "confidence": 0.6,
+      "evidence": "Both the updateEvent and deleteEvent fallback branches are logically dead. If externalCalendarId is falsy, you enter the else branch and then search for a calendar where cal.externalId === externalCalendarId \u2014 which is falsy. So find will never match anything.",
+      "reasoning": "The review diagnoses this as dead code caused by the variable being falsy in the else branch of the ternary, while the golden bug identifies a logic error in the comparison itself \u2014 that it should find by credentialId rather than matching externalId against externalCalendarId; these are different diagnoses that would lead to different fixes despite referencing the same code location."
+    }
+  ],
+  "bugs": 5
+}

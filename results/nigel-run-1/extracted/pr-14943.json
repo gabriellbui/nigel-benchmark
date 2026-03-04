@@ -1,0 +1,10 @@
+{
+  "issues": [
+    "The delete query's second OR clause lacks a method filter, causing it to delete any WorkflowReminder with retryCount > 1 regardless of method (email, WhatsApp, etc.), not just SMS reminders. This is a data loss bug.",
+    "The max retry threshold is hardcoded as the magic number 1 in the delete query (retryCount > 1) instead of being a named constant like MAX_SMS_RETRY_ATTEMPTS, making it unclear whether it means 1 retry or 2 total attempts.",
+    "The retry count increment logic (prisma.workflowReminder.update) is duplicated identically in both the else branch and the catch block, which will drift over time when someone updates one and not the other.",
+    "The retry count update in the catch block can itself throw and has no inner try/catch. If the DB is unreachable, the update fails silently, the retry count never increments, and the reminder enters an infinite retry loop.",
+    "The type assertion as (PartialWorkflowReminder & { retryCount: number })[] signals that the select pattern doesn't compose cleanly with TypeScript, accumulating tech debt.",
+    "The retryCount field on the schema is generic but only SMS scheduling uses it. The field name doesn't communicate whether it's SMS-only or intended for reuse by other reminder methods, and the delete query (even when fixed) would be premature if other methods later adopt it."
+  ]
+}

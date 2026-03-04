@@ -1,0 +1,14 @@
+{
+  "issues": [
+    "The deleteCache handler bypasses the repository pattern by calling prisma.calendarCache.deleteMany directly instead of using the existing CalendarCacheRepository.deleteManyByCredential() method, creating an inconsistency with the rest of the codebase.",
+    "The deleteCache handler has no awareness of delegation credentials. When a delegationCredentialId is passed, the handler silently returns \"not found\" instead of properly handling the delegation case.",
+    "Passing an empty object to updateManyByCredentialId to trigger Prisma's @updatedAt is a fragile hack that depends on ORM internals and will break silently if the schema is refactored or the ORM is switched. The updatedAt field should be set explicitly.",
+    "CredentialActionsDropdown manages too much state and logic, handling three state variables, two mutations, and conditional rendering for Google Calendar vs generic credentials. It also reimplements disconnect logic that already exists in DisconnectIntegration.",
+    "Date formatting in CredentialActionsDropdown hardcodes \"en-US\" locale instead of using undefined (browser locale) or the app's i18n locale context.",
+    "The cacheUpdatedAt field added to the connected calendars response has no explicit type definition update. The type is inferred implicitly from a spread, so downstream consumers have no type safety guaranteeing the field exists.",
+    "The migration file contains a stale auto-generated Prisma warning saying the migration is not possible if the table is not empty, but the actual migration handles existing rows fine with DEFAULT NOW(). This is misleading to future readers.",
+    "The test-gcal-webhooks.sh script is unrelated developer tooling that references a specific third-party tunneling service, hardcodes macOS-specific paths, and does not belong in a feature PR.",
+    "The findMany refactor in selectedCalendar.ts removes the satisfies type check, losing compile-time type safety on the args shape. This is also a drive-by style change sneaked into a feature PR.",
+    "The schema comment on the updatedAt field is unnecessary because @default(now()) @updatedAt is a standard Prisma pattern that is self-explanatory."
+  ]
+}

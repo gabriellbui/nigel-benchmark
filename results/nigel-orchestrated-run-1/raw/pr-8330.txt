@@ -1,0 +1,163 @@
+# PR Review: Advanced date override handling and timezone compatibility improvements
+
+## Overall Assessment: This needs serious work.
+
+Two confirmed logic bugs, a structurally questionable mutation pattern, insufficient test coverage for the scope of changes, and manual timezone arithmetic that fights the library instead of using it. The fact that this was eventually reverted and the entire subsystem was rewritten from scratch is the least surprising thing about this PR. This is duct tape on a broken abstraction.
+
+---
+
+## CRITICAL BUGS
+
+### Bug 1: Reference comparison on dayjs objects — dead code that hides a real failure
+
+**`packages/trpc/server/routers/viewer/slots.ts`, inside `checkIfIsAvailable`**
+
+```typescript
+if (dayjs(date.start).add(utcOffset, "minutes") === dayjs(date.end).add(utcOffset, "minutes")) {
+  return true;
+}
+```
+
+Two separate `dayjs()` calls produce two separate objects. `===` compares references, not values. This condition is **always false**. It is dead code. The author meant `.isSame()`.
+
+The practical impact: if an organizer creates a zero-length date override (start equals end, a common way to mark a full day as unavailable), this check silently does nothing. The slot gets marked as available when it should not be. This is not a style nit — it is a correctness bug that affects real scheduling outcomes.
+
+### Bug 2: Copy-paste error makes the working hours end-time check useless
+
+**`packages/trpc/server/routers/viewer/slots.ts`, inside `checkIfIsAvailable`**
+
+```typescript
+const start = slotStartTime.hour() * 60 + slotStartTime.minute();
+const end = slotStartTime.hour() * 60 + slotStartTime.minute();
+if (start < workingHour.startTime || end > workingHour.endTime) {
+  return true;
+}
+```
+
+`start` and `end` are computed from the **identical expression**: `slotStartTime.hour() * 60 + slotStartTime.minute()`. The `end` variable should use `slotEndTime`, not `slotStartTime`. As written, the boundary check `end > workingHour.endTime` is actually checking the slot's *start* time against the working hours' end. A 60-minute event starting at 4:30pm with working hours ending at 5:00pm? This code says "fine" because it checks 4:30 < 5:00, when the slot actually runs until 5:30.
+
+Two real logic bugs in a single function. Both silently produce wrong results. Both would survive casual testing because they fail in edge cases, not the happy path.
+
+---
+
+## DESIGN ISSUES
+
+### Issue 1: Side-effect mutation inside `.find()` — control flow by mutable flag
+
+```typescript
+let dateOverrideExist = false;
+
+if (
+  dateOverrides.find((date) => {
+    // ...
+    dateOverrideExist = true;
+    // ...
+  })
+) {
+  return false;
+}
+
+if (dateOverrideExist) {
+  return true;
+}
+```
+
+This is using `Array.find()` as a glorified `for` loop with side effects. The callback mutates `dateOverrideExist` as a flag, and the return value of `find()` is used for a *completely different* decision. Two separate pieces of logic crammed into one iteration, bridged by a mutable variable declared outside the closure.
+
+This should be:
+
+```typescript
+const overrideForDay = dateOverrides.find((date) => /* date matches slot's day */);
+if (overrideForDay) {
+  return isSlotWithinOverride(slot, overrideForDay);
+}
+```
+
+Clear. Testable. No mutable flags. No side effects inside iterators.
+
+### Issue 2: Manual timezone offset arithmetic instead of using the library
+
+**`packages/lib/slots.ts`**
+
+```typescript
+const organizerUtcOffset = dayjs(override.start.toString()).tz(override.timeZone).utcOffset();
+const inviteeUtcOffset = dayjs(override.start.toString()).tz(timeZone).utcOffset();
+const offset = inviteeUtcOffset - organizerUtcOffset;
+```
+
+The expression `dayjs(override.start).utc().add(offset, "minute")` appears **four times** with no extraction. But the deeper problem is that this entire approach is wrong-headed. dayjs with timezone support can convert between timezones directly. Instead, this code manually computes UTC offset differences and applies them as minute arithmetic — fragile, opaque, and does not correctly handle DST transitions at boundaries (the exact thing this PR claims to fix).
+
+Also, `dayjs(override.start.toString())` — why `.toString()`? If `override.start` is a `Date`, dayjs handles it natively. If there is a serialization edge case that requires the string conversion, it demands a comment explaining why.
+
+### Issue 3: `organizerTimeZone` means different things in different contexts
+
+In `getSchedule()`, it's a resolved fallback chain:
+```typescript
+const organizerTimeZone =
+  eventType.timeZone || eventType?.schedule?.timeZone || userAvailability?.[0]?.timeZone;
+```
+
+But when calling `checkIfIsAvailable`, the value comes from `schedule.timeZone`, `userSchedule.timeZone`, or `userSchedule?.timeZone` depending on the call site. Same parameter name, semantically different values. If intentionally different, the naming hides that. If they should be the same, some call sites are wrong.
+
+### Issue 4: `checkIfIsAvailable` is becoming a god function
+
+Before this PR: checks busy times (4 parameters). After: handles date overrides with timezone conversion AND working hours boundary checks (8 parameters), with three separate return-path responsibilities and interleaved early returns. This is the beginning of a function that accretes responsibilities until someone rewrites it — which is exactly what happened with PR #9802.
+
+---
+
+## COMMENT QUALITY
+
+```typescript
+//check if date override for slot exists
+//if no date override for slot exists check if it is within normal work hours
+```
+
+These restate what the code does. The code already says that. What the comments should explain is *why* the date override check must precede the working hours check, what the expected interaction between the two is, and what happens at timezone boundaries. Per codebase conventions: explain *why*, not *what*. Also, space after `//`.
+
+---
+
+## TEST COVERAGE
+
+One test. For a PR titled "Advanced date override handling and timezone compatibility improvements." One test that verifies a single positive UTC offset.
+
+Missing test cases:
+- Negative UTC offset timezones (west of UTC)
+- Overrides where the date crosses midnight in the invitee's timezone
+- Zero-length overrides (broken per Bug 1)
+- Working hours boundary cases (broken per Bug 2)
+- DST transitions — the supposed motivation for this PR
+- Round-robin / loose host scenarios with mixed timezones
+
+Critically, the substantial changes to `checkIfIsAvailable` are **completely untested**. Half the PR has no test coverage.
+
+---
+
+## PRIORITIZED RECOMMENDATIONS
+
+### MUST FIX (blocking):
+
+1. **`===` on dayjs objects** → use `.isSame()`. Silently breaks zero-length date overrides.
+2. **Copy-paste `start`/`end` variable** → `end` must use `slotEndTime`. Silently allows events to overflow working hours.
+3. **Extract the side-effect out of `.find()`**. Split into: find override for the day, then check if slot fits.
+
+### SHOULD FIX:
+
+4. **Extract repeated `dayjs(...).add(utcOffset, "minutes")`** into named variables.
+5. **Use dayjs timezone conversion directly** instead of manual offset arithmetic.
+6. **Clarify `organizerTimeZone` semantics** across call sites — unify or use distinct names.
+7. **Add meaningful test coverage**: negative offsets, midnight crossings, DST transitions, working hours boundaries, and direct tests for `checkIfIsAvailable`.
+
+### NICE TO HAVE:
+
+8. Replace "what" comments with "why" comments or remove them.
+9. Space after `//` per codebase style.
+10. Explain or remove `.toString()` on `override.start`.
+11. Whitespace-only diff changes add noise.
+
+---
+
+## FINAL WORD
+
+The fundamental problem here is not "we need more offset math in more places." It is that the abstraction for representing availability across timezones was broken at the data model level — times were stored as UTC without preserving the timezone context needed to interpret them correctly. This PR tries to fix that by injecting timezone arithmetic at every consumption point rather than fixing the representation itself. That is why it has two bugs, inconsistent timezone handling across call sites, and why the whole thing was eventually thrown away and rewritten.
+
+Sometimes the right answer to "this timezone logic is wrong" is not "add more timezone logic." It is to step back and ask whether the data flowing through the system carries enough information to make correct decisions in the first place. This PR never asks that question.

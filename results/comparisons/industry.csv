@@ -1,6 +1,7 @@
 Tool,Model,Recall,Critical+High Recall,Notes
+Nigel (orchestrated),Opus 4.6,87.1%,100.0%,Our agent — orchestrated multi-pass review
 Greptile,Unknown,82%,,Best in class (published benchmark)
-Nigel (baseline avg),Opus 4.6,75.8%,85.7%,Our agent — average of Run 1 (77.4%) and Run 2 (74.2%)
+Nigel (baseline avg),Opus 4.6,65.6%,71.4%,Our agent — average of 3 isolated runs (run-1: 61.3% / run-2: 71.0% / run-3: 64.5%)
 Cursor,Unknown,58%,,Published benchmark
 Copilot,Unknown,54%,,Published benchmark
 Code-Review Plugin,Sonnet 4.6,51.6%,71.4%,Official Claude Code plugin methodology

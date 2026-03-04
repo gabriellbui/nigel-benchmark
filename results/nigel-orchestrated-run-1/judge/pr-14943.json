@@ -1,0 +1,19 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.98,
+      "evidence": "Classic read-then-write race. reminder.retryCount was fetched at handler start. If the cron overlaps or fires twice, two executions read retryCount: 0, both write retryCount: 1, and you lose an increment. Use Prisma's atomic increment: { increment: 1 }",
+      "reasoning": "The review identifies the exact same defect \u2014 stale read of retryCount leading to lost increments under concurrency \u2014 and prescribes the same fix (Prisma atomic increment), noting it applies to both update calls."
+    },
+    {
+      "bug_idx": 1,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "The second OR branch has no method filter. It will delete any WorkflowReminder with retryCount > 1 \u2014 SMS, email, whatever else gets added in the future.",
+      "reasoning": "The review explicitly identifies that the retryCount > 1 deletion condition lacks a method: WorkflowMethods.SMS filter, causing it to delete non-SMS reminders, which is the exact defect described in the golden bug."
+    }
+  ],
+  "bugs": 2
+}

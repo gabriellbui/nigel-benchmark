@@ -1,0 +1,14 @@
+{
+  "issues": [
+    "Using `===` to compare two Dayjs objects performs a reference comparison, not a value comparison, so the condition is never true and the branch is dead code. Should use `.isSame()` instead.",
+    "The `end` variable in the working hours boundary check is computed from `slotStartTime` instead of `slotEndTime`, making it identical to `start`. This allows slots to leak outside working hours when an event spans a boundary.",
+    "Using `.find()` with a side-effecting callback that mutates the outer `dateOverrideExist` variable creates confusing, inverted control flow that is error-prone and hard to reason about. The override-checking logic should be broken into explicit filtering and bounds-checking steps.",
+    "The same offset arithmetic expression (`dayjs(override.start).utc().add(offset, 'minute')`) is repeated four times in `getSlots`, creating redundant Dayjs objects. These adjusted times should be extracted into variables.",
+    "The timezone offset logic manually computes the difference between invitee and organizer UTC offsets and applies it, rather than using Dayjs `.tz()` conversions directly. Manual offset arithmetic breaks when DST transitions occur between the override date and the current time.",
+    "Unnecessary `.toString()` call on a Date object before passing to `dayjs()` \u2014 `dayjs()` already handles Date objects directly.",
+    "Inconsistency between the computed `organizerTimeZone` (with a fallback chain) and the `schedule.timeZone` value actually passed to `checkIfIsAvailable`. It is unclear which timezone is authoritative, and they could differ.",
+    "Adding an optional `timeZone` property to the shared `TimeRange` type pollutes the base type for all consumers. A more specific derived type like `DateOverrideRange extends TimeRange` should be used instead.",
+    "Comments have missing spaces after `//` and merely restate what the code does rather than explaining the intent or reasoning behind the logic.",
+    "Test coverage for the timezone feature is insufficient \u2014 only one alternate timezone is tested on the happy path. Missing tests for date overrides crossing calendar day boundaries, DST transitions, the working hours boundary check, and the start-equals-end date override case."
+  ]
+}

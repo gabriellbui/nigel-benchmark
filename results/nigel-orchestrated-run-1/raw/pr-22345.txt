@@ -1,0 +1,133 @@
+## Nigel's Code Review: PR #22345 — Convert InsightsBookingService to Prisma.sql raw queries
+
+### Verdict: This needs work. Meaningfully.
+
+The intent is fine — moving from Prisma's query builder to raw SQL for performance/flexibility in an analytics context makes sense. But the execution has several problems ranging from a genuine runtime concern to architectural missteps and tests that have regressed from testing behavior to testing SQL string construction.
+
+---
+
+### 1. CRITICAL: Empty Array Passed to `ANY()` — Potential Runtime Issue
+
+In `buildOrgAuthorizationCondition`, `teamIds` is used unconditionally:
+
+```typescript
+const conditions: Prisma.Sql[] = [Prisma.sql`("teamId" = ANY(${teamIds})) AND ("isTeamBooking" = true)`];
+```
+
+If `teamsFromOrg` returns an empty array (new org, data inconsistency), `teamIds` is `[]`. Meanwhile `userIdsFromOrg` gets an explicit length check, but `teamIds` does not. This asymmetry suggests the author didn't think through the empty case systematically.
+
+What does `Prisma.sql` do with an empty JS array interpolated into `ANY()`? Does it produce `ANY(ARRAY[]::int[])` or something that blows up? This needs to be explicitly tested or documented.
+
+**Must fix.** Add the same length guard for `teamIds`, or add a test proving empty array behavior.
+
+---
+
+### 2. DESIGN: `getBaseConditions()` Is a Leaky Abstraction
+
+The old `findMany` encapsulated authorization, filtering, and execution. The new `getBaseConditions()` returns a raw `Prisma.Sql` fragment the caller must manually interpolate:
+
+```typescript
+const baseConditions = await service.getBaseConditions();
+const results = await prisma.$queryRaw<{ id: number }[]>`
+  SELECT id FROM "BookingTimeStatusDenormalized"
+  WHERE ${baseConditions}
+`;
+```
+
+Every caller now needs to know the table name, that conditions go in `WHERE`, and handle typing themselves. Authorization logic — the thing that absolutely must not be wrong — is now scattered across every callsite. If someone forgets `WHERE ${baseConditions}`, authorization is silently bypassed.
+
+**Should fix.** Consider keeping execution inside the service, or at minimum make `getBaseConditions()` private and expose methods that guarantee authorization is applied.
+
+---
+
+### 3. DESIGN: `InsightsBookingServicePublicOptions` Is Redundant and Dangerous
+
+```typescript
+export type InsightsBookingServicePublicOptions = {
+  scope: "user" | "org" | "team";
+  userId: number;
+  orgId: number;
+  teamId?: number;
+};
+```
+
+The existing `InsightsBookingServiceOptions` (Zod-inferred discriminated union) properly models constraints — `teamId` is required when `scope` is "team". The new type throws that away: `teamId` is just optional regardless of scope. Callers can now pass `{ scope: "team", userId: 1, orgId: 1 }` without `teamId` — TypeScript won't complain, but Zod will reject at runtime.
+
+**Must fix.** Delete `InsightsBookingServicePublicOptions`. Use the Zod-inferred type.
+
+---
+
+### 4. DESIGN: Repeated `reduce` Pattern (3x)
+
+This exact pattern appears in `buildFilterConditions`, `buildOrgAuthorizationCondition`, and `buildTeamAuthorizationCondition`:
+
+```typescript
+return conditions.reduce((acc, condition, index) => {
+  if (index === 0) return condition;
+  return Prisma.sql`(${acc}) OR (${condition})`;
+});
+```
+
+Three copies differing only by `AND` vs `OR`. Extract `joinSqlAnd`/`joinSqlOr` helpers. Also: `reduce` with no initial value on an empty array throws a TypeError — currently guarded by upstream checks, but one refactor away from a runtime crash.
+
+**Should fix.**
+
+---
+
+### 5. TESTS: Now Testing SQL String Construction, Not Behavior
+
+```typescript
+expect(conditions).toEqual(
+  Prisma.sql`(("teamId" = ANY(${[...]})) AND ("isTeamBooking" = true)) OR (...)`
+);
+```
+
+These are snapshot tests for SQL strings disguised as integration tests. Change `ANY()` to `IN()`, add parens, reorder — tests break despite identical semantics. The one test that actually queries the database is the only valuable one. The rest should execute conditions against the DB and assert on returned rows.
+
+**Should fix.**
+
+---
+
+### 6. REGRESSION: Caching Tests Deleted
+
+The entire `describe("Caching")` block was removed. The caching mechanism still exists (`cachedAuthConditions`, `cachedFilterConditions`). Caching in an authorization service matters — if it breaks, you get inconsistent authorization under load.
+
+**Should fix.** Restore caching tests. If `Prisma.Sql` equality is the issue, use `toBe` for reference equality.
+
+---
+
+### 7. NITPICK: Dead Branches in `getBaseConditions`
+
+`getAuthorizationConditions()` always returns `Prisma.Sql` (never null/falsy). The branches handling falsy `authConditions` are dead code. Simplify to:
+
+```typescript
+async getBaseConditions(): Promise<Prisma.Sql> {
+  const authConditions = await this.getAuthorizationConditions();
+  const filterConditions = await this.getFilterConditions();
+  if (filterConditions) {
+    return Prisma.sql`(${authConditions}) AND (${filterConditions})`;
+  }
+  return authConditions;
+}
+```
+
+---
+
+### 8. POSITIVE: SQL Injection Surface Is Clean
+
+All values flow through `Prisma.sql` tagged template interpolation (parameterized). No `Prisma.raw()`, no string concatenation. The `isOrgOwnerOrAdmin` change from array `.includes()` to direct comparison is also a mild improvement.
+
+---
+
+### Prioritized Recommendations
+
+| Priority | Issue |
+|---|---|
+| **Must fix** | Delete `InsightsBookingServicePublicOptions`, restore Zod-inferred type |
+| **Must fix** | Guard/test empty `teamIds` array in `buildOrgAuthorizationCondition` |
+| **Should fix** | Reconsider API surface — `getBaseConditions()` externalizing raw SQL is an authorization footgun |
+| **Should fix** | Extract repeated `reduce` join pattern into helpers |
+| **Should fix** | Restore caching tests |
+| **Should fix** | Convert condition-assertion tests to query-execution tests |
+| **Nitpick** | Simplify `getBaseConditions` dead branches |
+| **Nitpick** | Add comment on `1=0` explaining fail-closed intent |

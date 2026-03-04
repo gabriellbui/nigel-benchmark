@@ -1,0 +1,103 @@
+## Not terrible, but there are real issues here.
+
+The intent is clear — surface cache status for Google Calendar and let users nuke it. The plumbing is mostly sound, but there are authorization gaps, design inconsistencies, and some sloppy bits that need addressing before this ships.
+
+---
+
+### Critical Issues
+
+**1. Authorization bypass in `deleteCache.handler.ts`**
+
+The handler checks `credential.userId === user.id`, which is fine for personal credentials. But this PR also passes `delegationCredentialId` around in the UI component — what happens when a delegation credential is involved? The handler has zero awareness of delegation. If a user somehow passes a delegation credential ID, the `findFirst` with `userId: user.id` will fail silently (returns "not found"), which is technically safe but semantically wrong. More importantly, this handler doesn't use `CalendarCacheRepository.deleteManyByCredential()` which already exists — it goes straight to `prisma.calendarCache.deleteMany`. Pick a lane: use the repository or don't, but don't mix patterns within the same feature.
+
+**2. The `updateManyByCredentialId` call with empty data is a hack** — `packages/app-store/googlecalendar/lib/CalendarService.ts`
+
+```ts
+await SelectedCalendarRepository.updateManyByCredentialId(this.credential.id, {});
+```
+
+Passing an empty object to `updateMany` to trigger Prisma's `@updatedAt` is clever in the worst way. Anyone reading this without the comment will think it's a no-op. Anyone reading it *with* the comment still has to know Prisma internals to understand why it works. This is the kind of "trick" that breaks silently when someone refactors the schema or switches ORMs. If you need to touch `updatedAt`, set it explicitly:
+
+```ts
+await SelectedCalendarRepository.updateManyByCredentialId(this.credential.id, {
+  updatedAt: new Date(),
+});
+```
+
+---
+
+### Design Issues
+
+**3. `CredentialActionsDropdown` is doing too much**
+
+This component manages three pieces of state (`dropdownOpen`, `deleteModalOpen`, `disconnectModalOpen`), two mutations, and conditional rendering logic for Google Calendar vs. generic credentials. It also reimplements disconnect logic that presumably already lived in `DisconnectIntegration`. You've essentially stuffed two features into one component and gated them with `isGoogleCalendar`. When the next calendar type gets caching, this component will grow another tentacle.
+
+**4. Hardcoded date formatting locale** — `CredentialActionsDropdown.tsx:89`
+
+```ts
+new Intl.DateTimeFormat("en-US", {
+  dateStyle: "short",
+  timeStyle: "short",
+}).format(new Date(cacheUpdatedAt))
+```
+
+Hardcoded `"en-US"` in an app that has a full i18n system. Use `undefined` to respect the user's browser locale, or pull from the app's locale context.
+
+**5. `cacheUpdatedAt` data flow is fragile**
+
+The `connectedCalendars` handler fetches cache status as a separate query and merges it with a Map. Fine. But the type enrichment is implicit — `enrichedConnectedCalendars` gets its type inferred from the spread. Downstream consumers (like `SelectedCalendarsSettingsWebWrapper`) just trust that `cacheUpdatedAt` exists on the calendar object. There's no type definition update for the connected calendars response shape. This will bite someone.
+
+---
+
+### Nits and Smells
+
+**6. Migration comment is misleading** — `migration.sql`
+
+```sql
+-- Add the column with a default value to safely handle existing rows
+ALTER TABLE "CalendarCache" ADD COLUMN "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT NOW();
+```
+
+The Prisma warning at the top says "not possible if the table is not empty" but then the migration... handles it fine with `DEFAULT NOW()`. The auto-generated warning is stale/wrong relative to the actual migration. Clean it up so future readers don't waste time reconciling.
+
+**7. `test-gcal-webhooks.sh` doesn't belong in this PR**
+
+A tunnelmole-based webhook testing script is a developer tooling concern, not a feature PR concern. It references a specific third-party tunneling service, hardcodes paths like `/tmp/tmole.log`, and uses macOS-specific `sed -i ''`. This should be a separate PR or live in a developer docs/scripts repo.
+
+**8. `findMany` refactor in `selectedCalendar.ts` is drive-by cleanup**
+
+```ts
+- const args = { where, select, orderBy } satisfies Prisma.SelectedCalendarFindManyArgs;
+- return await prisma.selectedCalendar.findMany(args);
++ return await prisma.selectedCalendar.findMany({ where, select, orderBy });
+```
+
+The `satisfies` was providing compile-time type checking on the args shape. Removing it makes the code marginally shorter but loses that safety net. Not a hill to die on, but don't sneak style changes into feature PRs.
+
+**9. Schema comment is unnecessary** — `schema.prisma`
+
+```prisma
+// Provide an initial value for legacy rows and future raw inserts
+updatedAt    DateTime    @default(now()) @updatedAt
+```
+
+`@default(now()) @updatedAt` is a standard Prisma pattern. The comment explains what the decorators already say.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix:**
+1. Use `CalendarCacheRepository.deleteManyByCredential()` in the delete handler instead of raw Prisma — stay consistent with the repository pattern used everywhere else in this PR
+2. Set `updatedAt` explicitly instead of relying on the empty-object Prisma trick
+3. Fix the hardcoded `"en-US"` locale
+
+**Should fix:**
+4. Add explicit return type to `connectedCalendarsHandler` or update the connected calendar type definition to include `cacheUpdatedAt`
+5. Pull the webhook test script into its own PR
+6. Consider splitting `CredentialActionsDropdown` — at minimum extract the disconnect logic so you're not reimplementing what `DisconnectIntegration` already did
+
+**Nitpick:**
+7. Remove the stale Prisma warning from the migration file
+8. Drop the schema comment on `updatedAt`
+9. Don't sneak the `findMany` satisfies removal into a feature PR

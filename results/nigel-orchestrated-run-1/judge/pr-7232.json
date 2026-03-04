@@ -1,0 +1,19 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "Every call site uses `forEach` to invoke async deletion functions without awaiting them. ... deleteScheduledEmailReminder(reminder.id, reminder.referenceId); // async, not awaited ... `.forEach(async ...)` -- the classic footgun ... The old code at least collected Prisma deletions into arrays and awaited them via `Promise.all`. This PR removed that safety net while keeping fire-and-forget",
+      "reasoning": "The review's item #2 identifies the exact same defect: async functions deleteScheduledEmailReminder and deleteScheduledSMSReminder called without await inside forEach loops, leading to silent failures and unreliable cancellation of scheduled reminders."
+    },
+    {
+      "bug_idx": 1,
+      "match": true,
+      "confidence": 0.99,
+      "evidence": "When `immediateDelete` is `true`, this function cancels the SendGrid scheduled send and then... just returns. The `WorkflowReminder` record is never deleted from the database, never marked `cancelled`, nothing. It's a ghost row that will sit in the database forever. Additionally, the old code called the SendGrid DELETE endpoint (`/v3/user/scheduled_sends/${referenceId}`) after the cancel POST. That call is entirely gone now \u2014 leaving SendGrid resources hanging too.",
+      "reasoning": "The review explicitly identifies both aspects of the golden bug: the immediateDelete path orphans the WorkflowReminder DB record and the SendGrid DELETE API call is omitted."
+    }
+  ],
+  "bugs": 2
+}

@@ -1,0 +1,21 @@
+{
+  "issues": [
+    "Authorization logic uses && (AND) instead of || (OR) when checking isTeamAdmin and isTeamOwner, meaning a user must be both admin and owner simultaneously. Team admins who aren't owners are incorrectly blocked from the feature.",
+    "When booking.eventType?.teamId is null/undefined, a fallback value of 0 is passed to isTeamAdmin and isTeamOwner. A teamId of 0 almost certainly doesn't exist and needs a proper null check and early skip.",
+    "No booking status check exists in the addGuests handler, allowing guests to be added to cancelled or rejected bookings.",
+    "No past booking guard exists, allowing guests to be added to bookings that ended months ago with no startTime > now() check.",
+    "The handler ignores the eventType.guestsEnabled feature flag, bypassing the organizer's explicit setting controlling whether guests are allowed.",
+    "Client-side and server-side validation schemas are defined separately with different rules. The client checks uniqueness but the server doesn't, and the client-side schema is recreated on every render inside the component body.",
+    "Email comparison does not normalize case. Emails are case-insensitive per RFC 5321, so 'John@Example.com' and 'john@example.com' pass the duplicate check, creating duplicate attendees.",
+    "The blacklist lowercases its entries but incoming guest emails are never lowercased, so uppercase variants like 'BLOCKED@EXAMPLE.COM' bypass the blacklist.",
+    "sendAddGuestsEmails does not check organization email settings, eventTypeDisableHostEmail, or shouldSkipAttendeeEmailWithSettings, unconditionally sending emails to everyone and breaking customer configurations.",
+    "The catch block around sendAddGuestsEmails uses console.log instead of console.error and completely ignores the captured err object, providing zero diagnostic information in logs.",
+    "The 40+ line CalendarEvent construction block is nearly identical to editLocation.handler.ts and should be extracted into a shared utility like buildCalendarEventFromBooking().",
+    "The MultiEmail component reassigns a destructured prop with 'value = value || []', mutating a parameter.",
+    "MultiEmail uses key={index} for list items that can be added/removed, causing inputs to shift incorrectly when deleting items.",
+    "The tooltip content 'Remove email' is hardcoded in English in a fully-localized codebase.",
+    "IDs and test IDs use 'add_members' instead of 'add_guests', which are different concepts in cal.com and will mislead anyone searching the codebase.",
+    "Ternaries on startTime and endTime are dead code since these fields are non-nullable on Booking.",
+    "'Nameless' is a magic string that should be a translation key or constant."
+  ]
+}

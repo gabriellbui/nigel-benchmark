@@ -1,0 +1,127 @@
+## Not terrible, but there are some real issues lurking here.
+
+The feature itself is solid in concept — backup codes for 2FA are table stakes for any serious auth system. But the implementation has security concerns, duplicated logic, and some UI decisions that'll bite someone later.
+
+---
+
+### Security Issues (Must Fix)
+
+**1. Backup codes not invalidated on disable — `totp/disable.ts:58-68`**
+
+The comment says "we delete all stored backup codes at the end, no need to do this here" — and yes, `backupCodes` is set to `null` on line 107. But if the disable request *fails* after backup code validation (e.g., the prisma update throws), the backup code was verified but never consumed. An attacker with a stolen backup code gets infinite retries.
+
+In `next-auth-options.ts:149-158`, the login path correctly deletes the used code and re-encrypts. The disable path doesn't. This inconsistency is a bug waiting to be exploited.
+
+**2. `backupCodes[index] = null` leaves nulls in the array — `next-auth-options.ts:151`**
+
+When a backup code is used during login, it's replaced with `null`. But the `indexOf` check on line 147 uses strict equality via `indexOf`, and `null !== "somecode"`, so this technically works. However, the array grows polluted with nulls, and if someone later changes this to a `.find()` or `.includes()` with loose comparison, it breaks silently. Filter them out:
+
+```ts
+backupCodes.splice(index, 1);
+```
+
+Cleaner, no ambiguity, and the array actually shrinks.
+
+**3. Backup codes generated at setup time, not enable time — `totp/setup.ts:60-61`**
+
+Backup codes are generated and stored when the user *starts* 2FA setup (confirms password), not when they *complete* it (verify TOTP code). If the user abandons setup after seeing the QR code, backup codes are already in the database but 2FA isn't enabled (`twoFactorEnabled: false`). Not exploitable today, but it's sloppy — the codes should be committed alongside `twoFactorEnabled: true`.
+
+---
+
+### Design Issues (Should Fix)
+
+**4. Duplicated backup code verification logic**
+
+The backup code decryption + validation + `indexOf` check appears in two places:
+- `totp/disable.ts:50-66`
+- `next-auth-options.ts:131-158`
+
+This is textbook "extract a function" territory. Something like `verifyBackupCode(user, suppliedCode)` that returns `{ valid: boolean, remainingCodes: string[] }`. When the backup code format or validation logic changes, you'll only need to change it once.
+
+**5. `formatBackupCode` defined inside component — `EnableTwoFactorModal.tsx:163`**
+
+```ts
+const formatBackupCode = (code: string) => `${code.slice(0, 5)}-${code.slice(5, 10)}`;
+```
+
+This is used in both the download blob creation (line 95) and the display (line 203). It's also implicitly relied upon by `BackupCode.tsx` which expects the `XXXXX-XXXXX` format with `maxLength={11}`. This formatter should live in a shared util, not recreated inline. The magic numbers `5` and `10` appear in multiple places with no single source of truth for backup code format.
+
+**6. Untyped state — `EnableTwoFactorModal.tsx:64`**
+
+```ts
+const [backupCodes, setBackupCodes] = useState([]);
+```
+
+No type annotation. TypeScript infers `never[]`. This only works because `.map()` on `never[]` returns `never[]` which React happily renders as nothing, and the actual assignment from the API response silently widens the type. Add `useState<string[]>([])`.
+
+---
+
+### Abstraction Problems (Should Fix)
+
+**7. `BackupCode.tsx` exports as `TwoFactor` — line 7**
+
+```ts
+export default function TwoFactor({ center = true }) {
+```
+
+The file is `BackupCode.tsx` but the component function is named `TwoFactor`. This is confusing. The import works because it's a default export, but anyone reading the component tree in React DevTools will see two `TwoFactor` components with no way to distinguish them. Name it `BackupCode`.
+
+**8. Nested ternary in JSX — `login.tsx:221`**
+
+```tsx
+{twoFactorRequired ? !twoFactorLostAccess ? <TwoFactor center /> : <BackupCode center /> : null}
+```
+
+This is genuinely hard to parse. Nested ternaries in JSX are a maintenance hazard. Break it out:
+
+```tsx
+{twoFactorRequired && (twoFactorLostAccess ? <BackupCode center /> : <TwoFactor center />)}
+```
+
+Or better yet, extract it.
+
+---
+
+### Minor / Nitpicks
+
+**9. `resetForm` default parameter — `DisableTwoFactorModal.tsx:40`**
+
+```ts
+const resetForm = (clearPassword = true) => {
+```
+
+Called in two places: once with no args (implying `true`) and once with `false`. A boolean parameter that defaults to `true` is a readability trap. Consider `resetForm({ keepPassword: true })` or just two separate calls.
+
+**10. TODO/FIXME comments in tests — `login.2fa.e2e.ts:12, 50-51`**
+
+```ts
+// TODO: add more backup code tests, e.g. login + disabling 2fa with backup
+// FIXME: this passes even when switch is not checked
+```
+
+The FIXME was apparently a pre-existing issue, but the TODO is concerning. Backup code login isn't tested. Backup code disable isn't tested. The two most critical flows for this feature have no e2e coverage. This should block merge.
+
+**11. Object URL leak — `EnableTwoFactorModal.tsx:95-97`**
+
+The `revokeObjectURL` only fires if `backupCodesUrl` is already set (i.e., on re-setup). On first setup, the URL is created but never revoked when the modal closes. Minor leak, but `useEffect` cleanup would be proper.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix before merge:**
+1. Consume/invalidate backup code in the disable flow, not just at the end
+2. Extract shared backup code verification logic
+3. Add e2e tests for login and disable via backup code
+4. Type the `backupCodes` state properly
+
+**Should fix:**
+5. Rename the `BackupCode.tsx` export to `BackupCode`
+6. Move `formatBackupCode` to a shared util with the magic numbers as constants
+7. Fix the nested ternary in `login.tsx`
+8. Generate backup codes at enable time, not setup time
+
+**Nitpicks:**
+9. Clean up the boolean default param
+10. Handle the Object URL cleanup
+11. Use `splice` instead of null assignment for used codes

@@ -1,0 +1,50 @@
+
+--- Judging: each golden bug vs raw review ---
+Launching 31 judge calls across 10 PRs...
+  10/31 bugs judged (0 errors)
+  20/31 bugs judged (0 errors)
+  30/31 bugs judged (0 errors)
+  31/31 bugs judged (0 errors)
+[pr-10600] Done: 1/4 bugs matched
+[pr-8087] Done: 1/2 bugs matched
+[pr-10967] Done: 3/5 bugs matched
+[pr-22345] Done: 1/2 bugs matched
+[pr-7232] Done: 2/2 bugs matched
+[pr-8330] Done: 2/2 bugs matched
+[pr-11059] Done: 5/5 bugs matched
+[pr-14943] Done: 1/2 bugs matched
+[pr-14740] Done: 3/5 bugs matched
+[pr-22532] Done: 1/2 bugs matched
+
+--- Generating CSVs ---
+
+======================================================================
+RESULTS: nigel-run-3
+======================================================================
+PR           Caught    Total   Recall     Time
+---------- -------- -------- -------- --------
+#8087             1        2    50.0%      53s
+#10600            1        4    25.0%      45s
+#10967            3        5    60.0%      55s
+#22345            1        2    50.0%      49s
+#7232             2        2   100.0%      44s
+#8330             2        2   100.0%      46s
+#11059            5        5   100.0%      58s
+#14943            1        2    50.0%      56s
+#14740            3        5    60.0%      42s
+#22532            1        2    50.0%      44s
+---------- -------- -------- -------- --------
+TOTAL            20       31    64.5%
+
+Severity Breakdown:
+Severity     Caught    Total   Recall
+---------- -------- -------- --------
+Critical          2        2   100.0%
+High              8       12    66.7%
+Medium            6        9    66.7%
+Low               4        8    50.0%
+
+CSVs written:
+  results/nigel-run-3/golden-bugs.csv
+  results/nigel-run-3/summary.csv
+  results/nigel-run-3/severity-breakdown.csv

@@ -1,0 +1,10 @@
+{
+  "issues": [
+    "async callbacks inside .forEach() create silent fire-and-forget bugs in four locations (vital/reschedule.ts, wipemycalother/reschedule.ts, bookings.tsx:553, handleCancelBooking.ts:458) because Array.forEach does not await the return value of its callback, resulting in unhandled promise rejections and errors that bypass surrounding try/catch blocks.",
+    "The dynamic imports in appStore are eager promises (bare import() calls) that all fire immediately at module load time, not lazy thunks. This means all 28 modules resolve in parallel at startup instead of on-demand, adding async/await ceremony to every callsite for zero code-splitting benefit.",
+    "The app resolution and validation pattern (await appStore[key], check for 'lib' property, log warning) is copy-pasted 5+ times across getCalendar.ts, videoClient.ts, handleCancelBooking.ts, deletePayment.ts, handlePayment.ts, and bookings.tsx instead of being extracted into a shared helper.",
+    "getCalendarCredentials is not marked async but now returns objects where the calendar property is a Promise<Calendar | null> instead of Calendar | null, since getCalendar() now returns a Promise. The function signature doesn't reflect this, making it fragile for any consumer other than getConnectedCalendars which works around it with an explicit await.",
+    "The fix in handleCancelBooking.ts:474 correctly converts one .forEach to a for...of loop with await, but this pattern was not applied consistently to the other three .forEach(async ...) locations in the PR.",
+    "A gratuitous blank line was added in CalendarManager.ts:31 inside getCalendarCredentials that serves no purpose and adds noise to the diff."
+  ]
+}

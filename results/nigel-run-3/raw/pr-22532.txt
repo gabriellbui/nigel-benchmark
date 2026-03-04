@@ -1,0 +1,102 @@
+## Not terrible, but there are some real issues here that need addressing.
+
+This PR adds cache status visibility and a "delete cache" action for Google Calendar integrations. The intent is fine — giving users visibility into and control over cached data is reasonable. But the execution has several problems worth calling out.
+
+---
+
+### Design Issues
+
+**1. Authorization bypass in `deleteCache.handler.ts`**
+
+The handler checks `credential.userId === user.id` via the `where` clause, but this only covers direct ownership. The rest of the codebase clearly deals with delegation credentials (`delegationCredentialId` is all over the UI component). What happens if a user tries to delete cache for a delegated credential? The `findFirst` will return null and throw — which is the right outcome by accident, not by design. But it's worth being explicit about this, especially since delegation logic elsewhere is more nuanced.
+
+**2. The `updateManyByCredentialId` call with an empty object is suspicious**
+
+```ts
+// packages/app-store/googlecalendar/lib/CalendarService.ts
+await SelectedCalendarRepository.updateManyByCredentialId(this.credential.id, {});
+```
+
+You're passing an empty `data` object to `updateMany` to trigger Prisma's implicit `updatedAt` behavior on `SelectedCalendar`. This is clever-in-a-bad-way. If someone reads this six months from now, they'll have no idea why you're "updating" records with nothing. The comment above it helps, but this is a side-effect hack — you're relying on Prisma's `@updatedAt` directive to auto-touch the timestamp. If someone removes `@updatedAt` from the schema, this silently breaks. A more explicit `{ updatedAt: new Date() }` would make the intent unmistakable.
+
+**3. The `CalendarCache.updatedAt` migration has a subtle issue**
+
+```sql
+ALTER TABLE "CalendarCache" ADD COLUMN "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT NOW();
+```
+
+`DEFAULT NOW()` in PostgreSQL is evaluated once at migration time for all existing rows — which is fine. But the Prisma schema uses `@default(now()) @updatedAt`, which means Prisma manages this field. The SQL default exists only for "legacy rows and future raw inserts" per the comment, but if anyone does raw SQL inserts elsewhere, they'll get `NOW()` at insert time and never get updates because `@updatedAt` is a Prisma-level concern, not database-level. The comment acknowledges this, but it's a footgun waiting to happen.
+
+**4. `cacheUpdatedAt` sourced from two different tables**
+
+The `connectedCalendars` handler enriches with `CalendarCache.updatedAt` (max across all cache entries for a credential), while `CalendarService.fetchAndSaveAvailability` touches `SelectedCalendar.updatedAt`. These are two different timestamps on two different tables measuring two different things. The `UserWithCalendars` type now includes `updatedAt` and `googleChannelId` from `SelectedCalendar`, but the UI consumes `cacheUpdatedAt` from the enrichment. What's the `SelectedCalendar.updatedAt` being used for then? Is it displayed anywhere? If not, why are we fetching it?
+
+---
+
+### Abstraction Problems
+
+**5. `CredentialActionsDropdown` is doing too much**
+
+This component manages three pieces of state (dropdown, delete modal, disconnect modal), two mutations, and conditional rendering logic for Google Calendar vs. other types. It's a 157-line component that's essentially two features stapled together (cache management + disconnect). The `canDisconnect` and `hasCache` flags drive completely independent UI branches — these should arguably be separate concerns composed together, not one monolithic dropdown.
+
+**6. Hardcoded date formatting**
+
+```ts
+new Intl.DateTimeFormat("en-US", {
+  dateStyle: "short",
+  timeStyle: "short",
+}).format(new Date(cacheUpdatedAt))
+```
+
+Hardcoded `"en-US"` in a component that imports `useLocale`. The locale should come from the user's settings, not be hardcoded to American English. This is particularly ironic given the component already has i18n infrastructure wired up.
+
+---
+
+### Questionable Additions
+
+**7. The test script doesn't belong in this PR**
+
+`scripts/test-gcal-webhooks.sh` is a tunneling helper for local development. It has nothing to do with cache status and actions. It's also using tunnelmole which appears to be a free tier service with rate limits baked into the error handling. This belongs in a separate PR or in developer documentation, not shipped with a feature PR.
+
+**8. The `dev:cron` change is unrelated**
+
+```diff
+-    "dev:cron": "ts-node cron-tester.ts",
++    "dev:cron": "npx tsx cron-tester.ts",
+```
+
+Drive-by fix. Keep PRs focused.
+
+---
+
+### Minor Issues
+
+**9. Hardcoded CSS colors in the dropdown**
+
+```tsx
+<div className="text-sm font-medium text-gray-900 dark:text-white">
+<div className="text-xs text-gray-500 dark:text-white">
+```
+
+The rest of the codebase likely uses design token classes (like `text-default`, `text-subtle`). Hardcoding Tailwind color values bypasses the theme system.
+
+**10. The `deleteCache` tRPC route has no input schema file**
+
+Every other route in the calendars router has a `.schema.ts` file for its input validation. `deleteCache` inlines its schema directly in the router. Inconsistent with the established pattern.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix:**
+- Fix the hardcoded `"en-US"` locale — this is a user-facing bug for non-English users
+- Make the `updateManyByCredentialId({})` call explicit with `{ updatedAt: new Date() }` — don't rely on implicit Prisma magic
+- Clarify the relationship between `CalendarCache.updatedAt` and `SelectedCalendar.updatedAt` — if `SelectedCalendar.updatedAt` isn't used in the UI, don't fetch it
+
+**Should fix:**
+- Extract a proper input schema file for `deleteCache` to match codebase conventions
+- Use design token classes instead of hardcoded Tailwind colors
+- Remove the unrelated `dev:cron` and webhook script changes from this PR
+
+**Nitpicks:**
+- The `|| null` coercion on `delegationCredentialId` (line `connectedCalendar.delegationCredentialId || null`) suggests a type mismatch upstream — might be worth investigating why it's needed rather than patching it in the template

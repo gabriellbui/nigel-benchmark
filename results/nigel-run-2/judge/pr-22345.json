@@ -1,0 +1,19 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.95,
+      "evidence": "getAuthorizationConditions always returns a Prisma.Sql (never null). So the else branch (return NOTHING_CONDITION) is only reachable if authConditions is falsy \u2014 but it's always a Prisma.Sql object, which is truthy. This means the else branch is dead code.",
+      "reasoning": "The review explicitly identifies that getAuthorizationConditions always returns a truthy Prisma.Sql object, making the else branches unreachable dead code, which is the same root cause as the golden bug."
+    },
+    {
+      "bug_idx": 1,
+      "match": false,
+      "confidence": 0.8,
+      "evidence": "When `userIdsFromTeam` is empty, the condition only matches team bookings... Same applies to `buildOrgAuthorizationCondition`.",
+      "reasoning": "The review identifies a different defect: empty arrays causing conditional omission of SQL clauses in the query-building step, whereas the golden bug is specifically about the `teamsFromOrg.length > 0` guard preventing `userIdsFromOrg` from being fetched at all for orgs without child teams \u2014 a data-fetching guard issue, not a query-building issue."
+    }
+  ],
+  "bugs": 2
+}

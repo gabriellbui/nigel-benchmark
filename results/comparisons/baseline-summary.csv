@@ -1,0 +1,42 @@
+PR,Severity,Golden Bug,run-1,run-2,run-3,Consistency,orchestrated-1
+8087,Low,Try-catch around await for import failures,MISS,MISS,MISS,0/3,CATCH
+8087,Critical,forEach with async callbacks (fire-and-forget),CATCH,CATCH,CATCH,3/3,CATCH
+10600,Low,TwoFactor naming in BackupCode.tsx,CATCH,CATCH,CATCH,3/3,CATCH
+10600,Low,Error message wrong context (disable not login),MISS,MISS,MISS,0/3,CATCH
+10600,Medium,Case-sensitive indexOf on backup codes,MISS,MISS,MISS,0/3,CATCH
+10600,High,TOCTOU race on concurrent backup code use,MISS,MISS,MISS,0/3,CATCH
+10967,High,Null reference on mainHostDestinationCalendar,CATCH,CATCH,CATCH,3/3,CATCH
+10967,Low,Redundant optional chaining,MISS,MISS,MISS,0/3,MISS
+10967,High,externalCalendarId find always fails (dead code),MISS,CATCH,MISS,1/3,CATCH
+10967,Medium,Logic inversion in org slug/billing,CATCH,CATCH,CATCH,3/3,CATCH
+10967,Low,Calendar interface not implemented by Office365/Lark,CATCH,CATCH,CATCH,3/3,CATCH
+22345,Low,Dead branches in getBaseConditions,CATCH,CATCH,CATCH,3/3,CATCH
+22345,Medium,Org members excluded when no child teams,MISS,MISS,MISS,0/3,MISS
+7232,Medium,Async delete without await in forEach,CATCH,CATCH,CATCH,3/3,CATCH
+7232,High,immediateDelete orphans DB records,CATCH,CATCH,CATCH,3/3,CATCH
+8330,Medium,slotStartTime instead of slotEndTime,CATCH,CATCH,CATCH,3/3,CATCH
+8330,Medium,=== on dayjs objects (reference comparison),CATCH,CATCH,CATCH,3/3,CATCH
+11059,High,Hardcoded refresh_token string,CATCH,CATCH,CATCH,3/3,CATCH
+11059,High,Invalid Zod schema computed property keys,CATCH,CATCH,CATCH,3/3,CATCH
+11059,High,parseRefreshTokenResponse returns safeParse wrapper,MISS,CATCH,CATCH,2/3,CATCH
+11059,High,refreshFunction returns fetch Response not token,MISS,CATCH,CATCH,2/3,CATCH
+11059,High,res.data doesn't exist on fetch Response,MISS,CATCH,CATCH,2/3,CATCH
+14943,High,Stale retryCount read-then-write,MISS,CATCH,MISS,1/3,CATCH
+14943,High,Missing SMS filter in deleteMany OR clause,CATCH,CATCH,CATCH,3/3,CATCH
+14740,High,Case sensitivity bypass in email blacklist,CATCH,MISS,MISS,1/3,CATCH
+14740,Critical,&& instead of || in auth check,CATCH,CATCH,CATCH,3/3,CATCH
+14740,Medium,Wrong list to sendAddGuestsEmails,MISS,MISS,MISS,0/3,MISS
+14740,Medium,No dedup within input (createMany duplicates),CATCH,CATCH,CATCH,3/3,CATCH
+14740,Low,Array initialized with [''],CATCH,CATCH,CATCH,3/3,MISS
+22532,Medium,Empty data {} in updateMany (updatedAt won't trigger),CATCH,CATCH,CATCH,3/3,CATCH
+22532,Low,macOS sed syntax fails on Linux,CATCH,MISS,MISS,1/3,CATCH
+,,,,,,,
+,,TOTALS,,,,,
+,,run-1,19/31 (61.3%),,,,,
+,,run-2,22/31 (71.0%),,,,,
+,,run-3,20/31 (64.5%),,,,,
+,,Baseline avg,20.3/31 (65.6%),,,,,
+,,orchestrated-1,27/31 (87.1%),,,,,
+,,Consistent catches (3/3),17,,,,,
+,,Consistent misses (0/3),7,,,,,
+,,Inconsistent (1-2/3),7,,,,,

@@ -1,0 +1,12 @@
+pr_number,pr_title,total_bugs,caught,missed,recall
+8087,"Async import of the appStore packages",2,2,0,100.0%
+10600,"feat: 2fa backup codes",4,4,0,100.0%
+10967,"fix: handle collective multiple host on destinationCalendar",5,4,1,80.0%
+22345,"feat: convert InsightsBookingService to use Prisma.sql raw queries",2,1,1,50.0%
+7232,"Comprehensive workflow reminder management for booking lifecycle events",2,2,0,100.0%
+8330,"Advanced date override handling and timezone compatibility improvements",2,2,0,100.0%
+11059,"OAuth credential sync and app integration enhancements",5,5,0,100.0%
+14943,"SMS workflow reminder retry count tracking",2,2,0,100.0%
+14740,"Add guest management functionality to existing bookings",5,3,2,60.0%
+22532,"feat: add calendar cache status and actions (#22532)",2,2,0,100.0%
+TOTAL,"All PRs",31,27,4,87.1%

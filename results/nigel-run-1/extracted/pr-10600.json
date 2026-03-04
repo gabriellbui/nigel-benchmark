@@ -1,0 +1,17 @@
+{
+  "issues": [
+    "Backup codes are generated and stored at 2FA setup time (when user enters password) rather than at enable time (after TOTP verification succeeds), meaning codes persist in the database even if the user never completes setup.",
+    "Raw backup codes are returned in plaintext in the setup API response before 2FA is confirmed, risking exposure if the response is intercepted or logged.",
+    "In the TOTP disable endpoint, a used backup code is not invalidated immediately after verification. If the disable operation fails partway through after verification but before the final prisma update, the backup code remains valid.",
+    "There is no rate limiting on backup code attempts in the TOTP disable endpoint or the login path, allowing unlimited brute-force guesses.",
+    "Backup code verification logic (decrypt, parse JSON, indexOf, check) is copy-pasted between totp/disable.ts and next-auth-options.ts instead of being extracted into a shared utility function.",
+    "Used backup codes are marked by setting them to null in the array, creating a mixed string | null array that is fragile and requires null filtering in any code that iterates over the codes.",
+    "The backupCodes state in EnableTwoFactorModal.tsx is initialized as useState([]) without a type annotation, causing TypeScript to infer never[] and relying on implicit any.",
+    "Blob URLs created for backup code downloads are never cleaned up on component unmount, causing a memory leak if the modal is closed without downloading.",
+    "The file is named BackupCode.tsx but the exported function is named TwoFactor, creating a confusing mismatch that will mislead developers.",
+    "The formatBackupCode function is defined inline in EnableTwoFactorModal but the same format is assumed in BackupCode.tsx via placeholder and length constraints, and should be a shared constant or utility.",
+    "Nested ternary in login.tsx ({twoFactorRequired ? !twoFactorLostAccess ? <TwoFactor /> : <BackupCode /> : null}) lacks parentheses and is difficult to read.",
+    "Multiple TODO comments for critical test paths (login with backup codes, disable 2FA with backup codes, file content checks, clipboard content checks) are left in the code rather than being implemented.",
+    "A FIXME comment documents a pre-existing broken test assertion (switch not checked) without fixing it, risking further rot."
+  ]
+}

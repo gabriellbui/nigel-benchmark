@@ -1,0 +1,16 @@
+{
+  "issues": [
+    "The `minimumTokenResponseSchema` Zod schema uses `z.string().toString()` as computed property keys, which evaluates to a static internal Zod string representation, not a dynamic key matcher. The schema does not validate flexible keys as intended \u2014 it creates literal properties named after Zod's internal type strings.",
+    "When a refresh token is not present in the response, the code fabricates one by assigning the literal string `\"refresh_token\"`. This fake token will cause opaque failures when the system later attempts to use it to refresh credentials.",
+    "In `GoogleCalendarService`, the return value of `parseRefreshTokenResponse` (a Zod `SafeParseReturnType` wrapper object with `success`, `data`, and `error` fields) is stored directly as the credential key in a Prisma update, instead of accessing `.data`. This is a data corruption bug.",
+    "The webhook endpoint at `apps/web/pages/api/webhook/app-credential.ts` has no HTTP method check, so any HTTP method hits the handler. It also lacks rate limiting on an endpoint that writes credentials to the database.",
+    "The webhook secret comparison uses `!==`, which is vulnerable to timing attacks. It should use `crypto.timingSafeEqual` instead.",
+    "The `refreshOAuthTokens` function accepts a `refreshFunction` callback but may conditionally ignore it and call a completely different endpoint. The return types are inconsistent between branches \u2014 one returns a raw `fetch()` Response, while the other returns whatever the passed function returns \u2014 causing callers that access `.json()` or `.data` to break depending on which branch executed.",
+    "Error logging was removed from the Office365 calendar service's token parsing flow. Now if token parsing fails, it silently continues with stale credentials instead of logging the Zod error. This is a regression.",
+    "Salesforce has a manual refresh token flow added directly in its constructor instead of using the centralized `refreshOAuthTokens` function that every other integration uses, with no explanation for the inconsistency.",
+    "An empty JSDoc comment (`/** */`) exists at `apps/web/pages/api/webhook/app-credential.ts:16` and should either contain useful documentation or be removed.",
+    "The `.env.example` comment says the key must be 32 bytes for AES256, but the suggested command `openssl rand -base64 24` generates 24 random bytes encoded as 32 base64 characters. It is unclear whether the decryption function expects 32 raw bytes or 32 base64 characters, making the guidance misleading.",
+    "If the `CALCOM_APP_CREDENTIAL_ENCRYPTION_KEY` environment variable is not set, an empty string is passed to the `symmetricDecrypt` function. This will either throw a cryptic crypto error or succeed with garbage output. It should fail fast with a clear message instead.",
+    "The OAuth utils were moved to `_utils/oauth/` but there is no barrel export (`index.ts`), forcing every consumer to import individual files with long paths."
+  ]
+}

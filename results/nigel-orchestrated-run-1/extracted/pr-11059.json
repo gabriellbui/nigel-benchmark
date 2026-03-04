@@ -1,0 +1,24 @@
+{
+  "issues": [
+    "In parseRefreshTokenResponse.ts:5-11, z.string().toString() evaluates to the literal string \"ZodString\" at runtime, creating an object property literally named \"ZodString\" instead of a dynamic key schema. This means the Zod schema will never match real provider response fields like expires_in or expiry_date.",
+    "In parseRefreshTokenResponse.ts:13-30, the function returns the entire safeParse wrapper object ({ success: true, data: {...} }) instead of returning refreshTokenResponse.data, causing downstream consumers to receive the wrong shape.",
+    "In googlecalendar/lib/CalendarService.ts, the safeParse wrapper (instead of actual token data) is stored directly into the database as the credential key. Every subsequent read expecting key.access_token will fail, which is likely what caused the revert.",
+    "In zoomvideo/lib/VideoApiAdapter.ts, the same safeParse wrapper issue means downstream code expects token data but gets the wrapper object instead.",
+    "In office365calendar/lib/CalendarService.ts, the PR deletes structured error logging for Outlook token failures, replacing it with a generic throw. This is a regression in production observability.",
+    "In googlecalendar/lib/CalendarService.ts, when APP_CREDENTIAL_SHARING_ENABLED is true, refreshOAuthTokens returns a raw fetch Response. Fetch Response objects don't have a .data property (that's Axios/Gaxios), so token becomes undefined and the credential update writes garbage.",
+    "In refreshOAuthTokens.ts, the sync branch returns a raw fetch Response while the normal branch returns provider-specific types (GaxiosResponse, HubspotToken, AxiosResponse, etc.). The return type is any, hiding the inconsistency from the type system, and no caller handles both shapes correctly.",
+    "In parseRefreshTokenResponse.ts:24-26, when the provider doesn't return a refresh token, the code injects the literal string \"refresh_token\" as a fake value. The next refresh cycle will send refresh_token=refresh_token to the OAuth provider, which will reject it and permanently break the integration.",
+    "In zoho-bigin/lib/CalendarService.ts, refreshOAuthTokens is called with credentialId instead of credential.userId as every other integration does. When credential sharing is enabled, the sync endpoint receives a credential ID thinking it's a user ID.",
+    "In the app-credential.ts webhook endpoint (line 25-28), the secret comparison uses !== instead of crypto.timingSafeEqual(), making it vulnerable to timing attacks.",
+    "The app-credential.ts webhook endpoint has no HTTP method check, so it accepts GET, PUT, DELETE requests when it should be restricted to POST only.",
+    "In app-credential.ts (line 31), .parse() is used instead of .safeParse(), meaning a ZodError will throw and result in an unhandled 500 error instead of a proper 400 response.",
+    "In app-credential.ts (line 58), decryption falls back to an empty string (process.env.CALCOM_APP_CREDENTIAL_ENCRYPTION_KEY || \"\") instead of failing explicitly when the encryption key is missing.",
+    "In app-credential.ts (line 16), there is an empty JSDoc comment (/** */) that serves no purpose.",
+    "In salesforce/lib/CalendarService.ts, the integration adds a brand new manual token refresh directly in the constructor flow instead of using refreshOAuthTokens like every other integration, and contains dead code checking .success which is always true since the function throws on failure.",
+    "refreshOAuthTokens is a leaky abstraction that returns different types per branch without normalizing them. Callers still need to know which code path executed, adding indirection without reducing call-site complexity.",
+    "parseRefreshTokenResponse conflates three concerns \u2014 schema selection, validation, and fake refresh token injection \u2014 into one function, making it harder to maintain and test each responsibility independently.",
+    "There are redundant async/await patterns in 7 lambda wrappers (async () => await fetch(...)) where the await is unnecessary since the function could just return the promise directly.",
+    "In zoho-bigin/api/add.ts, the dynamic ${appConfig.slug} was changed to a hardcoded literal \"zoho-bigin\" with no explanation, reducing flexibility.",
+    "APP_CREDENTIAL_SHARING_ENABLED is typed as string | undefined rather than boolean, and is not properly coerced with !! for boolean checks."
+  ]
+}

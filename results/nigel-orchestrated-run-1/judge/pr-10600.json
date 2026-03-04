@@ -1,0 +1,33 @@
+{
+  "matches": [
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "BackupCode.tsx exports a function named `TwoFactor` ... File is `BackupCode.tsx`. Export is named `TwoFactor`. The existing `TwoFactor.tsx` also exports `TwoFactor`. Two files exporting the same function name with completely different purposes. Name it `BackupCode` or `BackupCodeInput`.",
+      "reasoning": "The review explicitly identifies the same defect: the exported function in BackupCode.tsx is named TwoFactor, which is inconsistent naming."
+    },
+    {
+      "bug_idx": 1,
+      "match": true,
+      "confidence": 0.97,
+      "evidence": "Says \"backup code login\" but this is the *disable* endpoint. Clearly copy-pasted from the login flow",
+      "reasoning": "The review explicitly identifies that the console.error message incorrectly says 'backup code login' when it is in the disable endpoint, which is the exact defect described in the golden bug."
+    },
+    {
+      "bug_idx": 2,
+      "match": true,
+      "confidence": 0.99,
+      "evidence": "Backup codes are hex strings from crypto.randomBytes(5).toString(\"hex\") (lowercase). If a user types A3F2B instead of a3f2b, it fails. This is user-hostile for a feature that is explicitly the \"I am already locked out\" escape hatch. A .toLowerCase() call costs nothing and prevents support tickets.",
+      "reasoning": "The review explicitly identifies that indexOf() is case-sensitive for hex backup codes and recommends adding .toLowerCase() to fix the case-insensitive comparison, which is exactly the golden bug."
+    },
+    {
+      "bug_idx": 3,
+      "match": true,
+      "confidence": 0.99,
+      "evidence": "Classic TOCTOU (time-of-check-time-of-use) race condition. Two concurrent requests with the same backup code will both read the same encrypted blob, both find the code, both \"use\" it, and both write back. The single-use guarantee is broken.",
+      "reasoning": "The review explicitly identifies the same race condition where concurrent requests can both validate and consume the same backup code due to non-atomic read-modify-write on the encrypted blob, matching the golden bug exactly."
+    }
+  ],
+  "bugs": 4
+}

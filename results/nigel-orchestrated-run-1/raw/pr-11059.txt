@@ -1,0 +1,128 @@
+# Code Review: PR #11059 — OAuth credential sync and app integration enhancements
+
+## Overall Verdict: This needs serious work. Ship this and you'll break Google Calendar for every user.
+
+The architectural direction — centralizing OAuth token refresh logic and adding a credential sync path for self-hosted instances — is sound. But the execution is riddled with bugs, several of which are data-corrupting or service-breaking. The fact that this was merged then reverted due to Google Calendar booking issues confirms that nobody properly reviewed it the first time.
+
+---
+
+## CRITICAL BUGS — Must Fix Before Merge
+
+### 1. Broken Zod Schema — `parseRefreshTokenResponse.ts:5-11`
+
+```typescript
+const minimumTokenResponseSchema = z.object({
+  access_token: z.string(),
+  [z.string().toString()]: z.number(),
+  [z.string().optional().toString()]: z.unknown().optional(),
+});
+```
+
+`z.string().toString()` evaluates to the literal string `"ZodString"` at runtime. This doesn't create a dynamic key schema — it creates an object with a property literally named `"ZodString"`. This will never match `expires_in`, `expiry_date`, or any real provider response field. Use `z.object({ access_token: z.string() }).passthrough()` instead.
+
+### 2. Returns SafeParse Wrapper Instead of Data — `parseRefreshTokenResponse.ts:13-30`
+
+The function returns the entire `{ success: true, data: {...} }` safeParse wrapper, not `refreshTokenResponse.data`. This cascades into:
+
+- **`googlecalendar/lib/CalendarService.ts`**: Stores `{ success: true, data: {...} }` directly into the database as credential key. Every subsequent read expecting `key.access_token` will fail. **This is almost certainly what caused the revert.**
+- **`zoomvideo/lib/VideoApiAdapter.ts`**: Same problem — downstream code expects token data, gets the wrapper.
+- **`office365calendar/lib/CalendarService.ts`**: Works accidentally because it spreads `tokenResponse.data`, but the deleted error logging is a regression in observability.
+
+### 3. Google Calendar `res.data` Doesn't Exist on Fetch Response — `googlecalendar/lib/CalendarService.ts`
+
+When `APP_CREDENTIAL_SHARING_ENABLED` is true, `refreshOAuthTokens` returns a raw `fetch` Response. Fetch Response objects don't have `.data` (that's Axios/Gaxios). So `token` becomes `undefined`, and the credential update writes garbage. The two code paths return fundamentally different shapes.
+
+### 4. Inconsistent Return Types From `refreshOAuthTokens` — `refreshOAuthTokens.ts`
+
+The sync branch returns a raw `fetch` Response. The normal branch returns whatever the provider-specific function returns (GaxiosResponse, HubspotToken, AxiosResponse, etc.). Return type is `any`, hiding this completely from the type system. Every caller has to handle both shapes; none of them do.
+
+### 5. Fake Refresh Token Injection — `parseRefreshTokenResponse.ts:24-26`
+
+```typescript
+if (!refreshTokenResponse.data.refresh_token) {
+  refreshTokenResponse.data.refresh_token = "refresh_token";
+}
+```
+
+Injects the literal string `"refresh_token"` when the provider doesn't return one. Next refresh cycle sends `refresh_token=refresh_token` to the OAuth provider, which rejects it, permanently breaking the integration. Should use the existing refresh token as fallback, not a hardcoded string.
+
+### 6. Zoho Bigin Passes `credentialId` Instead of `userId` — `zoho-bigin/lib/CalendarService.ts`
+
+```typescript
+refreshOAuthTokens(/* ... */, "zoho-bigin", credentialId)
+```
+
+Every other integration passes `credential.userId`. This passes `credentialId`. When credential sharing is enabled, the sync endpoint receives a credential ID thinking it's a user ID. Copy-paste error.
+
+---
+
+## DESIGN ISSUES — Should Fix
+
+### 7. Webhook Endpoint Security — `app-credential.ts`
+
+- **Timing-unsafe secret comparison** (line 25-28): Uses `!==` instead of `crypto.timingSafeEqual()`
+- **No HTTP method check**: Accepts GET, PUT, DELETE — should be POST only
+- **Uncaught parse errors** (line 31): `.parse()` throws ZodError → unhandled 500. Use `.safeParse()` + 400
+- **Decryption with empty string fallback** (line 58): `process.env.CALCOM_APP_CREDENTIAL_ENCRYPTION_KEY || ""` — fail explicitly instead
+- **Empty JSDoc** (line 16): `/** */` — just delete it
+
+### 8. Salesforce Breaks the Pattern — `salesforce/lib/CalendarService.ts`
+
+Every other integration wraps its existing refresh in `refreshOAuthTokens`. Salesforce adds a brand new manual token refresh directly in the constructor flow, doesn't use `refreshOAuthTokens` at all, and has dead code checking `.success` (which is always true since the function throws on failure).
+
+### 9. Deleted Error Logging — `office365calendar/lib/CalendarService.ts`
+
+The PR removes structured error logging for Outlook token failures:
+```typescript
+// DELETED: console.error("Outlook error grabbing new tokens ~ zodError:", ...)
+```
+Replaced with a generic throw. Regression in production observability.
+
+---
+
+## ABSTRACTION QUALITY — Needs Rethinking
+
+### 10. `refreshOAuthTokens` Is a Leaky Abstraction
+
+Returns different types per branch without normalizing. Callers still need to know which path executed. A proper abstraction would normalize the return type and handle `response.json()` internally for the sync path. As-is, this adds indirection without reducing call-site complexity.
+
+### 11. `parseRefreshTokenResponse` Conflates Three Concerns
+
+Schema selection, validation, and fake refresh token injection are mixed into one function. These should be separate — the schema selection belongs in the branching logic, validation is fine standalone, and refresh token handling should be the caller's responsibility (they know the current token).
+
+---
+
+## MINOR ISSUES
+
+- **Redundant `async/await`** in 7 lambda wrappers (`async () => await fetch(...)` → just `async () => fetch(...)`)
+- **Zoho Bigin hardcoded slug** (`zoho-bigin/api/add.ts`): Changed `${appConfig.slug}` to literal `"zoho-bigin"` — unexplained, reduces flexibility
+- **`APP_CREDENTIAL_SHARING_ENABLED`** is `string | undefined`, not `boolean` — add `!!` for proper boolean coercion
+
+---
+
+## Prioritized Recommendations
+
+**Must fix (blocking):**
+1. Fix `parseRefreshTokenResponse` to return `.data`, not the safeParse wrapper
+2. Fix the Zod schema — use `.passthrough()` instead of computed property keys
+3. Remove hardcoded `"refresh_token"` injection; pass existing token as fallback
+4. Normalize `refreshOAuthTokens` return type across both branches
+5. Fix Google Calendar's `res.data` access on fetch Response
+6. Fix Zoho Bigin `credentialId` → `userId`
+
+**Should fix:**
+7. Timing-safe comparison for webhook secret
+8. POST method check on webhook endpoint
+9. `.safeParse()` in webhook handler
+10. Restore Outlook error logging
+11. Fail explicitly on missing encryption key
+
+**Nitpicks:**
+12. Remove redundant `async/await` in lambdas
+13. Delete empty JSDoc
+14. Boolean coercion for `APP_CREDENTIAL_SHARING_ENABLED`
+15. Explain or revert Zoho Bigin hardcoded slug
+
+---
+
+The architectural direction is legitimate, but this has at least five bugs that will corrupt credentials or break integrations in production. `parseRefreshTokenResponse` alone has three independent bugs in 32 lines of code. Fix the critical issues, normalize return types, and write integration tests that exercise both sync and direct refresh paths. The prior revert confirms the testing story is insufficient.

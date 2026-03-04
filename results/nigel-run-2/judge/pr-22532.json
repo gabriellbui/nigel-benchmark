@@ -1,0 +1,19 @@
+{
+  "matches": [
+    {
+      "bug_idx": 1,
+      "match": false,
+      "confidence": 0.95,
+      "evidence": "",
+      "reasoning": "The review does not mention any issues with sed syntax, macOS/Linux compatibility, or the -i flag behavior differences across platforms."
+    },
+    {
+      "bug_idx": 0,
+      "match": true,
+      "confidence": 0.82,
+      "evidence": "Passing `{}` as the update data to trigger Prisma's `@updatedAt` side effect is clever but fragile. This relies on an implicit Prisma behavior where `updateMany` with empty data still bumps `@updatedAt` fields. ... Either pass `{ updatedAt: new Date() }` explicitly",
+      "reasoning": "The review identifies the same code (`updateManyByCredentialId` with empty `{}`), the same mechanism (empty data interacting with `@updatedAt`), and recommends the same fix (explicitly set `updatedAt`), though the reviewer frames it as fragile rather than currently broken."
+    }
+  ],
+  "bugs": 2
+}

@@ -1,0 +1,13 @@
+{
+  "issues": [
+    "In `getBaseConditions`, the `else` branch returning `NOTHING_CONDITION` (`1=0`) is dead code because `getAuthorizationConditions` always returns a `Prisma.Sql` object (which is truthy), making the fallback unreachable. This dead branch in query-building code could cause a `WHERE 1=0` in production if the logic ever changes unexpectedly.",
+    "In `buildTeamAuthorizationCondition`, when `userIdsFromTeam` is empty, the `userId: { in: userIdsFromTeam }` clause is now conditionally omitted, changing behavior from the old Prisma code which always included it. This is a hidden behavioral change that could be a data access bug, and the same issue applies to `buildOrgAuthorizationCondition`.",
+    "The `reduce` pattern for joining SQL fragments with OR/AND is duplicated three times across `buildOrgAuthorizationCondition`, `buildTeamAuthorizationCondition`, and `buildFilterConditions`. This should be extracted into a shared helper to avoid copy-paste errors.",
+    "`InsightsBookingServicePublicOptions` is a hand-rolled type that is a loose superset of the Zod-derived `InsightsBookingServiceOptions`. The constructor accepts the looser type but internal methods use `Extract<InsightsBookingServiceOptions, ...>`, creating a type mismatch that could cause runtime surprises.",
+    "The `findMany` method was removed without providing a replacement query execution method, forcing every caller to know internal table names, column names, and how to compose raw SQL via `$queryRaw`. This is a step backward in encapsulation.",
+    "All public methods now return `Prisma.Sql` fragments, coupling every consumer to Prisma's raw query API and leaking implementation details. This locks in the query backend and prevents future flexibility.",
+    "Caching tests were removed entirely but the caching mechanism (`cachedAuthConditions`, `cachedFilterConditions`) still exists in the implementation, leaving untested code paths that can silently rot.",
+    "Test assertions using `toEqual` on `Prisma.Sql` objects are fragile and produce incomprehensible diffs on failure, since they rely on deep comparison of internal `strings` and `values` arrays without explanation.",
+    "The `isOrgOwnerOrAdmin` change from `.includes()` to explicit `===` comparisons is unrelated to the Prisma.sql migration and should be in a separate commit to keep the PR focused."
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "issues": [
+    "In four locations across reschedule.ts, bookings.tsx, and handleCancelBooking.ts, async callbacks are used inside .forEach(), which does not await returned promises. This means calendar deletion operations during rescheduling fire off as unhandled, unawaited promises with errors silently swallowed, causing calendar events to not be reliably deleted.",
+    "The dynamic imports in the appStore object are eagerly evaluated at module load time, firing ~28 parallel module loads at startup regardless of which integrations a user has configured. If the goal is runtime performance rather than just chunk splitting, the imports should be wrapped in thunks (() => import(...)) for lazy loading.",
+    "In CalendarManager.ts, getCalendarCredentials is not made async, so the calendar property in the returned object silently changed from Calendar | null to Promise<Calendar | null>. Any existing consumer that accesses .calendar without await will get a truthy Promise object instead of null, breaking null checks.",
+    "Stray blank line added at line 31 in packages/core/CalendarManager.ts that adds noise to the diff."
+  ]
+}

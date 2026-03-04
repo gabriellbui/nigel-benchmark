@@ -1,0 +1,129 @@
+## Not terrible, but there are some real concerns here.
+
+The intent is clear — moving from Prisma's query builder to raw SQL via `Prisma.sql` tagged templates, presumably for performance or flexibility. The migration is mostly mechanical and correct, but there are design issues that'll bite you later.
+
+---
+
+### Design Issues
+
+**1. `getBaseConditions` has a logic bug in its fallback**
+
+```typescript
+// insightsBooking.ts — getBaseConditions()
+if (authConditions && filterConditions) {
+  return Prisma.sql`(${authConditions}) AND (${filterConditions})`;
+} else if (authConditions) {
+  return authConditions;
+} else if (filterConditions) {
+  return filterConditions;
+} else {
+  return NOTHING_CONDITION;
+}
+```
+
+`authConditions` is *always* truthy — it returns `Prisma.Sql`, never `null`. `getAuthorizationConditions()` returns `NOTHING_CONDITION` (`1=0`) as its "deny all" sentinel, not `null`. So the `else if (filterConditions)` and `else` branches are dead code. If auth returns `1=0` and there are filter conditions, you get `(1=0) AND (filters)` — which is correct behavior (deny wins), but the branching logic *looks* like it's trying to handle optionality that doesn't exist. This is confusing to the next person reading it.
+
+Meanwhile `getFilterConditions` *does* return `null`. So realistically this is always `authConditions` or `authConditions AND filterConditions`. Simplify it.
+
+**2. The `reduce` pattern for joining SQL conditions is repeated three times**
+
+`buildFilterConditions`, `buildOrgAuthorizationCondition`, and `buildTeamAuthorizationCondition` all have identical reduce logic:
+
+```typescript
+return conditions.reduce((acc, condition, index) => {
+  if (index === 0) return condition;
+  return Prisma.sql`(${acc}) OR (${condition})`;
+});
+```
+
+Extract a helper. Something like `joinSql(conditions, 'AND' | 'OR')`. You're building a raw SQL query builder inside a service — the least you can do is not copy-paste the joiner logic.
+
+**3. `buildTeamAuthorizationCondition` has an empty array edge case**
+
+```typescript
+const userIdsFromTeam = usersFromTeam.map((u) => u.userId);
+// ...
+const conditions: Prisma.Sql[] = [
+  Prisma.sql`("teamId" = ${options.teamId}) AND ("isTeamBooking" = true)`,
+];
+
+if (userIdsFromTeam.length > 0) {
+  conditions.push(Prisma.sql`("userId" = ANY(${userIdsFromTeam})) AND ("isTeamBooking" = false)`);
+}
+```
+
+Good — the `length > 0` guard is there. But `buildOrgAuthorizationCondition` doesn't guard `teamIds` the same way. If `teamsFromOrg` returns empty, you get `"teamId" = ANY(ARRAY[])` which is valid PostgreSQL (evaluates to false) but inconsistent with how `userIdsFromOrg` is handled two lines later. Pick one pattern and stick with it.
+
+**4. `InsightsBookingServicePublicOptions` is a poor name and a partial duplicate**
+
+```typescript
+export type InsightsBookingServicePublicOptions = {
+  scope: "user" | "org" | "team";
+  userId: number;
+  orgId: number;
+  teamId?: number;
+};
+```
+
+This is basically a loosened version of the Zod-validated `InsightsBookingServiceOptions` (which is a discriminated union). The constructor now accepts `InsightsBookingServicePublicOptions` instead of the validated type, which *bypasses the Zod validation entirely*. You had a discriminated union that enforced "team scope requires teamId" — now you accept `teamId?: number` on everything. That's a regression in type safety. Why was this change made?
+
+**5. `findMany` was removed with no replacement in this service**
+
+The old API was:
+```typescript
+const results = await service.findMany({ select: { id: true, title: true } });
+```
+
+Now callers have to do:
+```typescript
+const baseConditions = await service.getBaseConditions();
+const results = await prisma.$queryRaw`SELECT id FROM "BookingTimeStatusDenormalized" WHERE ${baseConditions}`;
+```
+
+So every caller now needs to know the table name, write raw SQL, and compose it themselves. The service went from being a query executor to a condition fragment factory. That's a meaningful API downgrade — the table name is now leaked into every call site. If this is an intermediate step toward a bigger migration, fine, but as-is you've pushed complexity outward.
+
+---
+
+### Test Issues
+
+**6. Caching tests were deleted**
+
+The entire `describe("Caching")` block was removed. The caching mechanism (`cachedAuthConditions`, `cachedFilterConditions`) still exists in the service. Why were the tests removed? If you changed the return type and the tests just needed updating, update them — don't delete them.
+
+**7. Tests are asserting on SQL fragment internals**
+
+```typescript
+expect(conditions).toEqual(Prisma.sql`("userId" = ${testData.user.id}) AND ("teamId" IS NULL)`);
+```
+
+You're now asserting on the *exact SQL string representation* of `Prisma.Sql` objects. This is fragile — any change in whitespace, parenthesization, or parameter ordering breaks the test without changing behavior. The old Prisma-typed assertions were at least comparing plain objects. Consider testing these by actually executing the query and checking results (like the `getBaseConditions` test does), or at minimum extract a helper to normalize the comparison.
+
+---
+
+### Minor Nits
+
+**8. `isOrgOwnerOrAdmin` change is fine**
+
+```typescript
+// Old: ([MembershipRole.OWNER, MembershipRole.ADMIN] as const).includes(membership.role)
+// New: membership.role === MembershipRole.OWNER || membership.role === MembershipRole.ADMIN
+```
+
+Cleaner. No complaints.
+
+---
+
+### Prioritized Recommendations
+
+**Must fix:**
+1. Extract the `reduce`-based SQL joiner into a shared utility — three identical copies is unacceptable
+2. Restore caching tests or document why they were intentionally removed
+3. Either keep the Zod discriminated union as the constructor input type, or justify why type safety was relaxed with `InsightsBookingServicePublicOptions`
+
+**Should fix:**
+4. Guard `teamIds` the same way `userIdsFromOrg` is guarded in `buildOrgAuthorizationCondition` — be consistent
+5. Simplify `getBaseConditions` branching to reflect the actual nullability contract (auth is never null, filters can be)
+6. Consider whether leaking the table name to every call site is the right API boundary
+
+**Nitpick:**
+7. The SQL fragment assertion style in tests will be a maintenance headache — worth reconsidering the test strategy

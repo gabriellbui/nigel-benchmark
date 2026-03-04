@@ -1,0 +1,125 @@
+**This needs work.** There's a data-scoping bug that could delete non-SMS reminders, duplicated retry logic, and a magic number with no explanation.
+
+---
+
+## Critical: Unscoped delete condition
+
+```
+scheduleSMSReminders.ts — delete query
+```
+
+The `OR` branch deleting reminders where `retryCount > 1` has **no method filter**. The original query correctly scoped deletes to `WorkflowMethods.SMS`. Now any `WorkflowReminder` — email, whatsapp, whatever — that somehow gets `retryCount > 1` gets nuked by the SMS cron job.
+
+```ts
+OR: [
+  {
+    method: WorkflowMethods.SMS,
+    scheduledDate: { lte: dayjs().toISOString() },
+  },
+  {
+    retryCount: { gt: 1 },  // ← deletes across ALL methods
+  },
+],
+```
+
+This should be:
+
+```ts
+{
+  retryCount: { gt: 1 },
+  method: WorkflowMethods.SMS,
+},
+```
+
+At minimum. Even then, I'd question why the retry-exhausted cleanup lives in an `OR` alongside the date-based cleanup rather than being its own clearly separated concern.
+
+---
+
+## Design: Magic number `1`
+
+`retryCount > 1` — why 1? Is the max retry count 2 attempts total? 1 retry? This is a policy decision buried in a query predicate. Extract it:
+
+```ts
+const MAX_SMS_RETRY_ATTEMPTS = 1;
+```
+
+Then use `gt: MAX_SMS_RETRY_ATTEMPTS` so the next person doesn't have to reverse-engineer the threshold from a Prisma `where` clause at 2am.
+
+---
+
+## Design: Duplicated retry increment
+
+The same `prisma.workflowReminder.update` call for incrementing `retryCount` appears in two places — the `else` branch (scheduling returned falsy) and the `catch` block:
+
+```ts
+// else branch (~line 178)
+await prisma.workflowReminder.update({
+  where: { id: reminder.id },
+  data: { retryCount: reminder.retryCount + 1 },
+});
+
+// catch block (~line 189)
+await prisma.workflowReminder.update({
+  where: { id: reminder.id },
+  data: { retryCount: reminder.retryCount + 1 },
+});
+```
+
+Copy-paste. Worse, if the `else` branch's prisma update itself throws, the `catch` fires and retries the same stale value — which happens to be correct by accident, not by design. Structure this so the retry increment happens in one place, after any failure path. A simple approach:
+
+```ts
+let success = false;
+try {
+  if (reminderPhone && message) {
+    const scheduledSMS = await twilio.scheduleSMS(...);
+    if (scheduledSMS) {
+      await prisma.workflowReminder.update({ ... referenceId ... });
+      success = true;
+    }
+  }
+} catch (error) {
+  console.log(`Error scheduling SMS with error ${error}`);
+}
+
+if (!success) {
+  await prisma.workflowReminder.update({
+    where: { id: reminder.id },
+    data: { retryCount: reminder.retryCount + 1 },
+  });
+}
+```
+
+One increment path. Clear intent. No accidental double-fire.
+
+---
+
+## Minor: Ad-hoc type widening
+
+```ts
+select: {
+  ...select,
+  retryCount: true,
+},
+})) as (PartialWorkflowReminder & { retryCount: number })[];
+```
+
+This inline type assertion is a code smell. If `retryCount` is now part of the query contract, update `PartialWorkflowReminder` or the `select` object to include it properly. Ad-hoc intersection types at call sites don't scale — the next field addition gets the same treatment and now you've got type assertions growing like weeds.
+
+---
+
+## Schema/Migration
+
+The migration and schema change are fine. `retryCount Int @default(0)` is the right call — non-nullable with a sensible default, no backfill needed.
+
+---
+
+## Prioritized recommendations
+
+| Priority | Issue |
+|---|---|
+| **Must fix** | Scope the `retryCount > 1` delete clause to `method: WorkflowMethods.SMS` — this is a data loss bug |
+| **Must fix** | Extract the magic `1` into a named constant |
+| **Should fix** | Deduplicate the retry increment into a single code path |
+| **Should fix** | Update `PartialWorkflowReminder` or `select` to include `retryCount` properly instead of inline type assertion |
+
+The retry-tracking concept is sound and needed. The implementation just needs tightening before it should merge.
